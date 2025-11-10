@@ -1,0 +1,78 @@
+from pydantic import BaseModel, EmailStr, validator
+from typing import Optional
+
+
+# ===============================
+# 🧩 User Creation Schema
+# ===============================
+class UserCreate(BaseModel):
+    email: EmailStr
+    username: str
+    password: str
+    full_name: Optional[str] = None
+
+    @validator("username")
+    def username_alphanumeric(cls, v):
+        assert v.isalnum(), "Username must be alphanumeric"
+        assert len(v) >= 3, "Username must be at least 3 characters"
+        return v
+
+    @validator("password")
+    def password_strength(cls, v):
+        assert len(v) >= 8, "Password must be at least 8 characters"
+        return v
+
+
+# ===============================
+# 🔐 User Login Schema
+# ===============================
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+# ===============================
+# 🎫 Token Response Schema
+# ===============================
+class TokenResp(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+
+
+# ===============================
+# 🧾 Token Data
+# ===============================
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+
+# ===============================
+# 📧 Forgot Password
+# ===============================
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+# ===============================
+# 🔑 Reset Password
+# ===============================
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @validator("new_password")
+    def password_strength(cls, v):
+        assert len(v) >= 8, "Password must be at least 8 characters"
+        return v
+
+
+# ===============================
+# 👤 User Output Schema
+# ===============================
+class UserOut(BaseModel):
+    id: str
+    email: Optional[str]
+    username: Optional[str]
+    full_name: Optional[str]
+    is_active: bool

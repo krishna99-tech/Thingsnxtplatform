@@ -1,0 +1,19 @@
+fastapi
+uvicorn
+websockets
+passlib[bcrypt]
+python-jose[cryptography]
+python-multipart
+bcrypt==3.2.2
+passlib==1.7.4
+passlib[argon2]
+argon2-cffi
+argon2-cffi
+dotenv
+pydantic[email]
+requests
+pymongo
+motor
+
+
+###Use for run the server -- uvicorn app:app --host 0.0.0.0 --port 3568
