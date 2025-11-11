@@ -52,10 +52,10 @@ def send_reset_email(email: str, token: str):
     try:
         app_name = "ThingsNXT IoT Platform"
         company_url = "https://thingsnxt.vercel.app/"
-        copyright_text = f"© {app_name} • Electro Gadgedc"
+        copyright_text = f"© {app_name} • ThingsNXT"
 
         reset_link = f"myapp://reset-password?token={token}"
-        web_reset_link = f"{company_url}/reset-password?token={token}"
+        web_reset_link = f"{company_url}/resetpage?token={token}"
 
         message = MIMEMultipart("alternative")
         message["Subject"] = f"{app_name} — Password Reset Request"
@@ -83,7 +83,7 @@ def send_reset_email(email: str, token: str):
                     <hr style="margin:24px 0;">
                     <div style="font-size:12px;color:#888;text-align:center;line-height:18px">
                         {copyright_text}<br>
-                        <a href="{company_url}" style="color:#aaa;text-decoration:none;">{company_url.replace('https://', '')}</a>
+                        <a href="{company_url}" style="color:#aaa;text-decoration:none;">{company_url.replace('https://Thingsnxt.vercel.app', '')}</a>
                     </div>
                 </div>
             </body>

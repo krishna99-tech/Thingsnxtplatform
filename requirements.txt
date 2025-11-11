@@ -17,3 +17,10 @@ motor
 
 
 ###Use for run the server -- uvicorn app:app --host 0.0.0.0 --port 3568
+
+
+## No need to change or add any other packages unless specified in the documentation.
+## Use 'pip install -r requirements.txt' to install the packages listed in this file.
+## Make sure to use a virtual environment to avoid package conflicts.
+## This file is auto-generated and should be maintained with care.
+# End of requirements.txt
