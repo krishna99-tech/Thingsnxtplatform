@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from auth_routes import router as auth_router
-from device_routes import router as device_router
+from device_routes import router as device_router, led_schedule_worker
 from websocket_routes import router as websocket_router
 import asyncio
 from websocket_manager import manager
@@ -73,6 +73,7 @@ async def startup_event():
     print("🚀 Starting Smart IoT Backend...")
     await init_db()  # initialize indexes
     asyncio.create_task(auto_offline_checker())
+    asyncio.create_task(led_schedule_worker())
     print("✅ MongoDB connected & background tasks started.")
 
 

@@ -14,6 +14,7 @@ pydantic[email]
 requests
 pymongo
 motor
+pytz
 
 
 ###Use for run the server -- uvicorn app:app --host 0.0.0.0 --port 3568

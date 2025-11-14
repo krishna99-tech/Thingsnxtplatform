@@ -8,7 +8,7 @@ load_dotenv()
 # ==============================
 # 🔌 MongoDB Connection
 # ==============================
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://krishna:9154243400@127.0.0.1:27017/?authSource=admin")
 
 # Async client for non-blocking Mongo access
 client = AsyncIOMotorClient(MONGO_URI)
@@ -25,6 +25,8 @@ async def init_db():
     await db.refresh_tokens.create_index("token", unique=True)
     await db.reset_tokens.create_index("token", unique=True)
     await db.devices.create_index("device_token", unique=True)
+    await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+    await db.notifications.create_index([("user_id", 1), ("read", 1)])
     print("✅ MongoDB indexes initialized")
 
 
