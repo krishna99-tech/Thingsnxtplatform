@@ -2,11 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from datetime import datetime, timedelta
 import secrets
+import logging
 from jose import JWTError, jwt
 from typing import Optional
 from bson import ObjectId
 
 from db import db, doc_to_dict
+
+logger = logging.getLogger(__name__)
 from schemas import (
     UserCreate,
     UserLogin,

@@ -19,15 +19,69 @@ db = client.iot_auth_db
 # 📦 Initialize Database Indexes
 # ==============================
 async def init_db():
-    """Create indexes for collections (async-safe)."""
-    await db.users.create_index("email", unique=True)
-    await db.users.create_index("username", unique=True)
-    await db.refresh_tokens.create_index("token", unique=True)
-    await db.reset_tokens.create_index("token", unique=True)
-    await db.devices.create_index("device_token", unique=True)
-    await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
-    await db.notifications.create_index([("user_id", 1), ("read", 1)])
-    print("✅ MongoDB indexes initialized")
+    """Create indexes for collections (async-safe) for optimal query performance."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # User indexes
+        await db.users.create_index("email", unique=True)
+        await db.users.create_index("username", unique=True)
+        await db.users.create_index("is_active")
+        logger.debug("✅ User indexes created")
+        
+        # Token indexes
+        await db.refresh_tokens.create_index("token", unique=True)
+        await db.refresh_tokens.create_index("user_id")
+        await db.refresh_tokens.create_index("expires_at", expireAfterSeconds=0)  # TTL index
+        await db.reset_tokens.create_index("token", unique=True)
+        await db.reset_tokens.create_index("email")
+        await db.reset_tokens.create_index("expires_at", expireAfterSeconds=0)  # TTL index
+        logger.debug("✅ Token indexes created")
+        
+        # Device indexes
+        await db.devices.create_index("device_token", unique=True)
+        await db.devices.create_index("user_id")
+        await db.devices.create_index([("user_id", 1), ("status", 1)])
+        await db.devices.create_index("last_active")
+        await db.devices.create_index("status")
+        logger.debug("✅ Device indexes created")
+        
+        # Telemetry indexes
+        await db.telemetry.create_index([("device_id", 1), ("key", 1)])
+        await db.telemetry.create_index([("device_id", 1), ("timestamp", -1)])
+        await db.telemetry.create_index("timestamp")
+        logger.debug("✅ Telemetry indexes created")
+        
+        # Dashboard indexes
+        await db.dashboards.create_index("user_id")
+        await db.dashboards.create_index([("user_id", 1), ("created_at", -1)])
+        logger.debug("✅ Dashboard indexes created")
+        
+        # Widget indexes
+        await db.widgets.create_index("dashboard_id")
+        await db.widgets.create_index("device_id")
+        await db.widgets.create_index([("dashboard_id", 1), ("type", 1)])
+        await db.widgets.create_index("config.virtual_pin")
+        logger.debug("✅ Widget indexes created")
+        
+        # LED Schedule indexes
+        await db.led_schedules.create_index("widget_id")
+        await db.led_schedules.create_index("device_id")
+        await db.led_schedules.create_index([("status", 1), ("execute_at", 1)])
+        await db.led_schedules.create_index("execute_at")
+        logger.debug("✅ LED Schedule indexes created")
+        
+        # Notification indexes
+        await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+        await db.notifications.create_index([("user_id", 1), ("read", 1)])
+        await db.notifications.create_index("created_at")
+        logger.debug("✅ Notification indexes created")
+        
+        logger.info("✅ All MongoDB indexes initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Error initializing database indexes: {e}", exc_info=True)
+        raise
 
 
 # ==============================

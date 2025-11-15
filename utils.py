@@ -1,11 +1,14 @@
 import os
+import logging
 from passlib.context import CryptContext
 from jose import jwt
 from datetime import datetime, timedelta
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from bson import ObjectId  # ✅ Add this import
+from bson import ObjectId
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # ⚙️ Constants
@@ -98,10 +101,10 @@ def send_reset_email(email: str, token: str):
             if EMAIL_USER and EMAIL_PASSWORD:
                 server.login(EMAIL_USER, EMAIL_PASSWORD)
             server.sendmail(EMAIL_USER, email, message.as_string())
-        print(f"Email sent to {email}")
+        logger.info(f"Password reset email sent to {email}")
         return True
     except Exception as e:
-        print("Email error:", e)
+        logger.error(f"Failed to send email to {email}: {e}", exc_info=True)
         return False
 
 # ============================================================

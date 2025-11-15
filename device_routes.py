@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse, JSONResponse
 from bson import ObjectId
 from datetime import datetime, timedelta
 import asyncio
 import secrets
 import json
+import logging
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 
@@ -12,6 +13,8 @@ from db import db
 from utils import OFFLINE_TIMEOUT, doc_to_dict
 from websocket_manager import manager
 from auth_routes import get_current_user
+
+logger = logging.getLogger(__name__)
 
 # Timezone support
 import pytz  # Import pytz first as fallback
@@ -352,55 +355,96 @@ async def ensure_led_widget_access(widget_oid: ObjectId, user_id: ObjectId):
 # ============================================================
 # 🚦 LED STATE CONTROL
 # ============================================================
-@router.post("/widgets/{widget_id}/state")
+@router.post("/widgets/{widget_id}/state", status_code=status.HTTP_200_OK)
 async def set_led_state(
     widget_id: str,
     body: Dict[str, Any],
     current_user: dict = Depends(get_current_user),
 ):
+    """
+    Set LED widget state (ON/OFF).
+    Broadcasts update via WebSocket for real-time UI updates.
+    """
     widget_oid = safe_oid(widget_id)
     if widget_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid widget ID")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid widget ID"
+        )
 
     user_id = safe_oid(current_user["id"])
-    widget, device_id = await ensure_led_widget_access(widget_oid, user_id)
+    try:
+        widget, device_id = await ensure_led_widget_access(widget_oid, user_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error accessing LED widget {widget_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to access widget"
+        )
 
     desired_state = body.get("state")
     if desired_state is None:
-        raise HTTPException(status_code=400, detail="Missing state")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing state parameter"
+        )
 
     try:
         bool_state = bool(int(desired_state)) if isinstance(desired_state, (int, str)) else bool(desired_state)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid state value") from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid state value. Must be 0/1 or true/false"
+        ) from exc
 
-    # Get virtual pin from widget config
-    widget_config = widget.get("config", {}) or {}
-    virtual_pin = widget_config.get("virtual_pin")
-    
-    await apply_led_state(device_id, bool_state, virtual_pin)
-    now = datetime.utcnow()
-    await db.widgets.update_one(
-        {"_id": widget["_id"]},
-        {"$set": {"value": 1 if bool_state else 0, "updated_at": now}},
-    )
-
-    updated_widget = await db.widgets.find_one({"_id": widget["_id"]})
-    if updated_widget:
-        widget_payload = doc_to_dict(updated_widget)
-        dashboard_id = widget_payload.get("dashboard_id")
-        if dashboard_id is None and updated_widget.get("dashboard_id"):
-            dashboard_id = str(updated_widget["dashboard_id"])
-        await manager.broadcast(
-            str(user_id),
-            {
-                "type": "widget_update",
-                "dashboard_id": dashboard_id,
-                "widget": widget_payload,
-            },
+    try:
+        # Get virtual pin from widget config
+        widget_config = widget.get("config", {}) or {}
+        virtual_pin = widget_config.get("virtual_pin")
+        
+        # Apply LED state (updates database and broadcasts)
+        await apply_led_state(device_id, bool_state, virtual_pin)
+        
+        # Update widget value
+        now = datetime.utcnow()
+        await db.widgets.update_one(
+            {"_id": widget["_id"]},
+            {"$set": {"value": 1 if bool_state else 0, "updated_at": now}},
         )
 
-    return {"message": "ok", "state": 1 if bool_state else 0}
+        # Broadcast widget update via WebSocket
+        updated_widget = await db.widgets.find_one({"_id": widget["_id"]})
+        if updated_widget:
+            widget_payload = doc_to_dict(updated_widget)
+            dashboard_id = widget_payload.get("dashboard_id")
+            if dashboard_id is None and updated_widget.get("dashboard_id"):
+                dashboard_id = str(updated_widget["dashboard_id"])
+            
+            await manager.broadcast(
+                str(user_id),
+                {
+                    "type": "widget_update",
+                    "dashboard_id": dashboard_id,
+                    "widget": widget_payload,
+                    "timestamp": now.isoformat(),
+                },
+            )
+        
+        logger.debug(f"LED widget {widget_id} set to {'ON' if bool_state else 'OFF'}")
+        return {
+            "message": "ok",
+            "state": 1 if bool_state else 0,
+            "virtual_pin": virtual_pin,
+            "timestamp": now.isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Error setting LED state for widget {widget_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update LED state"
+        )
 
 
 # ============================================================
@@ -544,26 +588,31 @@ async def push_telemetry(data: TelemetryData):
                 }
             )
 
-    # 4️⃣ Broadcast to WebSocket clients
-    await manager.broadcast(
-        user_id,
-        {
-            "type": "telemetry_update",
-            "device_id": str(device_id),
-            "timestamp": now.isoformat(),
-            "data": payload,
-        },
-    )
+    # 4️⃣ Broadcast to WebSocket clients for real-time updates
+    try:
+        await manager.broadcast(
+            user_id,
+            {
+                "type": "telemetry_update",
+                "device_id": str(device_id),
+                "timestamp": now.isoformat(),
+                "data": payload,
+            },
+        )
+    except Exception as e:
+        logger.warning(f"Failed to broadcast telemetry update for device {device_id}: {e}")
 
-    # 5️⃣ Include LED state if available
+    # 5️⃣ Include LED state if available (for backward compatibility)
     led_state_doc = await db.telemetry.find_one({"device_id": device_id, "key": "led_state"})
     led_state = led_state_doc.get("value") if led_state_doc else None
 
+    logger.debug(f"Telemetry updated for device {device_id}: {len(payload)} keys")
     return {
         "message": "ok",
         "device_id": str(device_id),
         "led": led_state,
         "updated_data": payload,
+        "timestamp": now.isoformat(),
     }
 
 
@@ -926,14 +975,19 @@ async def cancel_led_schedule(
 # 🕒 LED SCHEDULE EXECUTION WORKER
 # ============================================================
 async def led_schedule_worker():
-    """Background worker to execute pending LED schedules."""
+    """
+    Background worker to execute pending LED schedules.
+    Runs continuously, checking for schedules that need to be executed.
+    """
+    logger.info("LED schedule worker started")
     while True:
         try:
-            now = datetime.utcnow()
+            now_utc = datetime.utcnow()
             cursor = db.led_schedules.find(
-                {"status": "pending", "execute_at": {"$lte": now}}
+                {"status": "pending", "execute_at": {"$lte": now_utc}}
             ).sort("execute_at", 1)
 
+            executed_count = 0
             async for schedule in cursor:
                 schedule_id = schedule["_id"]
                 widget_id = schedule.get("widget_id")
@@ -990,25 +1044,35 @@ async def led_schedule_worker():
                     schedule_state = bool(schedule.get("state"))
                     duration_seconds = schedule.get("duration_seconds")
                     
+                    # Apply LED state (updates database and broadcasts)
                     await apply_led_state(device_oid, schedule_state, virtual_pin)
+                    
+                    # Update widget value
                     await db.widgets.update_one(
                         {"_id": widget_oid},
-                        {"$set": {"value": 1 if schedule_state else 0, "updated_at": now}},
+                        {"$set": {"value": 1 if schedule_state else 0, "updated_at": now_utc}},
                     )
+                    
+                    # Broadcast widget update
                     updated_widget = await db.widgets.find_one({"_id": widget_oid})
                     if updated_widget and created_by:
                         widget_payload = doc_to_dict(updated_widget)
                         dashboard_id = widget_payload.get("dashboard_id")
                         if dashboard_id is None and updated_widget.get("dashboard_id"):
                             dashboard_id = str(updated_widget["dashboard_id"])
-                        await manager.broadcast(
-                            str(created_by),
-                            {
-                                "type": "widget_update",
-                                "dashboard_id": dashboard_id,
-                                "widget": widget_payload,
-                            },
-                        )
+                        
+                        try:
+                            await manager.broadcast(
+                                str(created_by),
+                                {
+                                    "type": "widget_update",
+                                    "dashboard_id": dashboard_id,
+                                    "widget": widget_payload,
+                                    "timestamp": now_utc.isoformat(),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to broadcast widget update: {e}")
                     
                     # Create notification for schedule execution
                     device = await db.devices.find_one({"_id": device_oid})
@@ -1017,40 +1081,53 @@ async def led_schedule_worker():
                         state_text = "ON" if schedule_state else "OFF"
                         schedule_type = "Timer" if duration_seconds else "Schedule"
                         
-                        await create_notification(
-                            created_by,
-                            f"LED {schedule_type} Executed",
-                            f"LED turned {state_text}: {schedule_label}",
-                            notification_type,
-                            f"Widget: {widget.get('label', 'LED')}\nDevice: {device.get('name', 'Device')}\nVirtual Pin: {virtual_pin or 'N/A'}\nExecuted at: {now.strftime('%I:%M %p')}",
-                            device_oid,
-                            widget_oid,
-                        )
+                        try:
+                            await create_notification(
+                                created_by,
+                                f"LED {schedule_type} Executed",
+                                f"LED turned {state_text}: {schedule_label}",
+                                notification_type,
+                                f"Widget: {widget.get('label', 'LED')}\nDevice: {device.get('name', 'Device')}\nVirtual Pin: {virtual_pin or 'N/A'}\nExecuted at: {now_utc.strftime('%I:%M %p')}",
+                                device_oid,
+                                widget_oid,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to create notification: {e}")
 
+                    # Mark schedule as completed
                     await db.led_schedules.update_one(
                         {"_id": schedule_id},
                         {
                             "$set": {
                                 "status": "completed",
-                                "executed_at": now,
+                                "executed_at": now_utc,
                             }
                         },
                     )
 
+                    # Broadcast schedule execution event
                     if created_by:
                         dashboard_id = str(updated_widget["dashboard_id"]) if updated_widget and updated_widget.get("dashboard_id") else None
-                        await manager.broadcast(
-                            str(created_by),
-                            {
-                                "type": "led_schedule_executed",
-                                "widget_id": str(widget_oid),
-                                "dashboard_id": dashboard_id,
-                                "schedule_id": str(schedule_id),
-                                "state": bool(schedule.get("state")),
-                                "executed_at": now.isoformat(),
-                            },
-                        )
+                        try:
+                            await manager.broadcast(
+                                str(created_by),
+                                {
+                                    "type": "led_schedule_executed",
+                                    "widget_id": str(widget_oid),
+                                    "dashboard_id": dashboard_id,
+                                    "schedule_id": str(schedule_id),
+                                    "state": bool(schedule.get("state")),
+                                    "executed_at": now_utc.isoformat(),
+                                },
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to broadcast schedule execution: {e}")
+                    
+                    executed_count += 1
+                    logger.debug(f"LED schedule {schedule_id} executed successfully")
+                    
                 except Exception as exc:  # pylint: disable=broad-except
+                    logger.error(f"Error executing LED schedule {schedule_id}: {exc}", exc_info=True)
                     await db.led_schedules.update_one(
                         {"_id": schedule_id},
                         {
@@ -1061,8 +1138,12 @@ async def led_schedule_worker():
                             }
                         },
                     )
+            
+            if executed_count > 0:
+                logger.info(f"LED schedule worker executed {executed_count} schedule(s)")
+                
         except Exception as exc:  # pylint: disable=broad-except
-            print("led_schedule_worker error:", exc)
+            logger.error(f"LED schedule worker error: {exc}", exc_info=True)
 
         await asyncio.sleep(1)
 
