@@ -12,6 +12,10 @@ from utils import OFFLINE_TIMEOUT
 from datetime import datetime
 from db import db, init_db
 
+# Import the new routers and workers
+from events import router as events_router
+from event_manager import event_manager
+
 
 
 # Configure logging
@@ -45,7 +49,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(device_router)
 app.include_router(websocket_router)
-
+app.include_router(events_router)
 
 
 # Health check endpoint
@@ -108,6 +112,14 @@ async def auto_offline_checker():
                         {"_id": device["_id"]},
                         {"$set": {"status": "offline"}}
                     )
+
+                    # ❗ FIX: Broadcast to global SSE event manager
+                    asyncio.create_task(event_manager.broadcast({
+                        "type": "status_update",
+                        "device_id": str(device["_id"]),
+                        "status": "offline",
+                        "timestamp": now.isoformat()
+                    }))
 
                     await manager.broadcast(
                         str(device["user_id"]),

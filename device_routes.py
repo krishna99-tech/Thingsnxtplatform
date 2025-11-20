@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any, List
 from db import db
 from utils import OFFLINE_TIMEOUT, doc_to_dict
 from websocket_manager import manager
+from event_manager import event_manager # 👈 Import the global event manager
 from auth_routes import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -555,7 +556,18 @@ async def add_device(device: DeviceCreate, current_user: dict = Depends(get_curr
 
     result = await db.devices.insert_one(device_doc)
     new_device = await db.devices.find_one({"_id": result.inserted_id})
-    return doc_to_dict(new_device)
+    
+    # Convert to dict to ensure `id` field is a string for broadcasting
+    new_device_dict = doc_to_dict(new_device)
+
+    # Broadcast device addition via global SSE
+    asyncio.create_task(event_manager.broadcast({
+        "type": "device_added",
+        "data": new_device_dict,
+        "timestamp": now.isoformat()
+    }))
+
+    return new_device_dict
 
 
 @router.delete("/devices/{device_id}")
@@ -570,6 +582,13 @@ async def delete_device(device_id: str, current_user: dict = Depends(get_current
 
     await db.telemetry.delete_many({"device_id": device_oid})
     await db.devices.delete_one({"_id": device_oid})
+    
+    # Broadcast device removal via global SSE
+    asyncio.create_task(event_manager.broadcast({
+        "type": "device_removed",
+        "device_id": str(device_oid),
+        "timestamp": datetime.utcnow().isoformat()
+    }))
     
     # Broadcast device removal via WebSocket
     await manager.broadcast(
@@ -628,6 +647,15 @@ async def push_telemetry(data: TelemetryData):
     
     # Notify if device came back online
     if was_offline:
+        # Broadcast status update via global SSE
+        asyncio.create_task(event_manager.broadcast({
+            "type": "status_update",
+            "device_id": str(device_id),
+            "status": "online",
+            "timestamp": now.isoformat()
+        }))
+
+        # Broadcast status update via WebSocket
         device = await db.devices.find_one({"_id": device_id})
         if device:
             await manager.broadcast(
@@ -663,6 +691,15 @@ async def push_telemetry(data: TelemetryData):
                     }
                 }
             )
+
+    # Broadcast telemetry data via global SSE
+    asyncio.create_task(event_manager.broadcast({
+        "type": "telemetry_update",
+        "device_id": str(device_id),
+        "timestamp": now.isoformat(),
+        "data": payload,
+    }))
+
 
     # 4️⃣ Broadcast to WebSocket clients for real-time updates
     try:
@@ -1296,6 +1333,36 @@ async def mark_all_notifications_read(
     return {"message": "all notifications marked as read"}
 
 
+@router.delete("/notifications/{notification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_notification(
+    notification_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Deletes a specific notification for the current user.
+    """
+    user_id = safe_oid(current_user.get("id"))
+    notif_oid = safe_oid(notification_id)
+
+    if not user_id or not notif_oid:
+        raise HTTPException(status_code=400, detail="Invalid user or notification ID.")
+
+    # Ensure the notification belongs to the user before deleting
+    delete_result = await db.notifications.delete_one({
+        "_id": notif_oid,
+        "user_id": user_id
+    })
+
+    if delete_result.deleted_count == 0:
+        # This can happen if the notification doesn't exist or doesn't belong to the user
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Notification not found or you do not have permission to delete it."
+        )
+
+    # On success, FastAPI will return a 204 No Content response.
+
+
 @router.get("/notifications/stream")
 async def notification_stream(request: Request, current_user: dict = Depends(get_current_user)):
     """Server-Sent Events (SSE) stream for real-time notifications."""
@@ -1377,6 +1444,15 @@ async def auto_offline_checker():
                         {"_id": device["_id"]},
                         {"$set": {"status": "offline"}},
                     )
+                    # Broadcast status update via global SSE
+                    asyncio.create_task(event_manager.broadcast({
+                        "type": "status_update",
+                        "device_id": str(device["_id"]),
+                        "status": "offline",
+                        "timestamp": now.isoformat()
+                    }))
+
+                    # Broadcast status update via WebSocket
                     await manager.broadcast(
                         str(device["user_id"]),
                         {
