@@ -1,18 +1,32 @@
+import logging
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from bson import ObjectId
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 # ==============================
 # 🔌 MongoDB Connection
 # ==============================
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://krishna:9154243400@127.0.0.1:27017/?authSource=admin")
+DEFAULT_DB_NAME = os.getenv("MONGO_DB_NAME", "iot_auth_db")
+MONGO_URI = (
+    os.getenv("MONGO_URI")
+    or os.getenv("MONGODB_URI")
+    or f"mongodb://127.0.0.1:27017/{DEFAULT_DB_NAME}"
+)
+
+if not os.getenv("MONGO_URI") and not os.getenv("MONGODB_URI"):
+    logger.warning(
+        "MONGO_URI not provided. Falling back to local instance at %s. "
+        "Set MONGO_URI for production deployments.",
+        MONGO_URI,
+    )
 
 # Async client for non-blocking Mongo access
 client = AsyncIOMotorClient(MONGO_URI)
-db = client.iot_auth_db
+db = client[DEFAULT_DB_NAME]
 
 
 # ==============================

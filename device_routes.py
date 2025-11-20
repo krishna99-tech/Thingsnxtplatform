@@ -353,6 +353,82 @@ async def ensure_led_widget_access(widget_oid: ObjectId, user_id: ObjectId):
 
 
 # ============================================================
+# NEW: PATCH widget (update label / config / value)
+# ============================================================
+@router.patch("/widgets/{widget_id}")
+async def patch_widget(
+    widget_id: str,
+    body: Dict[str, Any],
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Partial update for a widget (label, config, value).
+    Returns updated widget and broadcasts widget_update to the user's websocket clients.
+    """
+    widget_oid = safe_oid(widget_id)
+    if widget_oid is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid widget ID")
+
+    user_id = safe_oid(current_user["id"])
+    if user_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID")
+
+    widget = await db.widgets.find_one({"_id": widget_oid})
+    if not widget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Widget not found")
+
+    # Verify the widget belongs to one of the user's dashboards
+    dashboard = await db.dashboards.find_one({"_id": widget["dashboard_id"], "user_id": user_id})
+    if not dashboard:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Allowed fields for partial update
+    allowed = {"label", "config", "value"}
+    update_fields: Dict[str, Any] = {}
+    for k in allowed:
+        if k in body:
+            update_fields[k] = body[k]
+
+    if not update_fields:
+        # Nothing to update
+        return {"message": "no_changes", "widget": doc_to_dict(widget)}
+
+    # Lowercase virtual_pin in config if present
+    if "config" in update_fields and isinstance(update_fields["config"], dict):
+        cfg = dict(update_fields["config"])
+        if "virtual_pin" in cfg and isinstance(cfg["virtual_pin"], str):
+            cfg["virtual_pin"] = cfg["virtual_pin"].lower()
+        update_fields["config"] = cfg
+
+    update_fields["updated_at"] = datetime.utcnow()
+
+    try:
+        await db.widgets.update_one({"_id": widget_oid}, {"$set": update_fields})
+        updated_widget = await db.widgets.find_one({"_id": widget_oid})
+        widget_payload = doc_to_dict(updated_widget)
+
+        # broadcast widget update to user's websocket clients
+        dashboard_id = widget_payload.get("dashboard_id")
+        if dashboard_id is None and updated_widget.get("dashboard_id"):
+            dashboard_id = str(updated_widget["dashboard_id"])
+
+        await manager.broadcast(
+            str(user_id),
+            {
+                "type": "widget_update",
+                "dashboard_id": dashboard_id,
+                "widget": widget_payload,
+                "timestamp": datetime.utcnow().isoformat(),
+            },
+        )
+
+        return widget_payload
+    except Exception as e:
+        logger.error(f"Failed to patch widget {widget_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update widget")
+
+
+# ============================================================
 # 🚦 LED STATE CONTROL
 # ============================================================
 @router.post("/widgets/{widget_id}/state", status_code=status.HTTP_200_OK)

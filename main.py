@@ -11,6 +11,8 @@ from websocket_manager import manager
 from utils import OFFLINE_TIMEOUT
 from datetime import datetime
 from db import db, init_db
+from schema import graphql_app
+
 
 # Configure logging
 logging.basicConfig(
@@ -43,6 +45,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(device_router)
 app.include_router(websocket_router)
+app.include_router(graphql_app, prefix="/graphql")
 
 
 # Health check endpoint
@@ -130,25 +133,27 @@ async def auto_offline_checker():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize application on startup."""
     logger.info("🚀 Starting ThingsNXT IoT Platform Backend...")
     
     try:
         # Initialize database indexes
         await init_db()
         logger.info("✅ Database indexes initialized")
-        
+
+
+
         # Start background tasks
         asyncio.create_task(auto_offline_checker())
         logger.info("✅ Auto-offline checker started")
-        
+
         asyncio.create_task(led_schedule_worker())
         logger.info("✅ LED schedule worker started")
-        
+
         logger.info("✅ Application startup complete")
     except Exception as e:
         logger.error(f"❌ Startup error: {e}", exc_info=True)
         raise
+
 
 
 @app.on_event("shutdown")
@@ -161,4 +166,4 @@ async def shutdown_event():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

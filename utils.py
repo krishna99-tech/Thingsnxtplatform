@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ⚙️ Constants
 # ============================================================
 OFFLINE_TIMEOUT = int(os.getenv("OFFLINE_TIMEOUT", "20"))
-SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
@@ -22,10 +22,17 @@ RESET_TOKEN_EXPIRE_HOURS = int(os.getenv("RESET_TOKEN_EXPIRE_HOURS", "2"))
 
 EMAIL_HOST = os.getenv("EMAIL_HOST", "smtp.gmail.com")
 EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
-EMAIL_USER = os.getenv("EMAIL_USER", "electrogadgedc@gmail.com")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "eekhyavnslgbixtk")
+EMAIL_USER = os.getenv("EMAIL_USER", "")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
+EMAIL_FROM = os.getenv("EMAIL_FROM") or EMAIL_USER
 
 pwd_context = CryptContext(schemes=[os.getenv("PWD_SCHEME", "bcrypt")], deprecated="auto")
+
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY environment variable is missing. "
+        "Generate a secure key (see secretkey.py) and export SECRET_KEY before starting the server."
+    )
 
 # ============================================================
 # 🔐 Password + JWT Utilities
@@ -53,6 +60,14 @@ def create_refresh_token(data: dict):
 # ============================================================
 def send_reset_email(email: str, token: str):
     try:
+        if not EMAIL_USER or not EMAIL_PASSWORD:
+            logger.warning(
+                "Email credentials missing; skipping password reset email for %s. "
+                "Set EMAIL_USER and EMAIL_PASSWORD to enable email delivery.",
+                email,
+            )
+            return False
+
         app_name = "ThingsNXT IoT Platform"
         company_url = "https://thingsnxt.vercel.app/"
         copyright_text = f"© {app_name} • ThingsNXT"
@@ -62,7 +77,7 @@ def send_reset_email(email: str, token: str):
 
         message = MIMEMultipart("alternative")
         message["Subject"] = f"{app_name} — Password Reset Request"
-        message["From"] = EMAIL_USER
+        message["From"] = EMAIL_FROM or EMAIL_USER
         message["To"] = email
 
         html = f"""
@@ -98,9 +113,8 @@ def send_reset_email(email: str, token: str):
         with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
             server.ehlo()
             server.starttls()
-            if EMAIL_USER and EMAIL_PASSWORD:
-                server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, email, message.as_string())
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_FROM or EMAIL_USER, email, message.as_string())
         logger.info(f"Password reset email sent to {email}")
         return True
     except Exception as e:
