@@ -11,7 +11,7 @@ from websocket_manager import manager
 from utils import OFFLINE_TIMEOUT
 from datetime import datetime
 from db import db, init_db
-from schema import graphql_app
+
 
 
 # Configure logging
@@ -45,7 +45,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(device_router)
 app.include_router(websocket_router)
-app.include_router(graphql_app, prefix="/graphql")
+
 
 
 # Health check endpoint
