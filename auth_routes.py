@@ -248,6 +248,23 @@ async def forgot_password(request: ForgotPasswordRequest):
 
 
 # ===============================================
+# 🔐 Verify Reset Token
+# ===============================================
+@router.get("/verify-reset-token")
+async def verify_reset_token(token: str = Query(...)):
+    """Check if a password reset token is valid and not expired."""
+    token_data = await db.reset_tokens.find_one({"token": token, "used": False})
+
+    if not token_data:
+        raise HTTPException(status_code=404, detail="Token not found or has been used")
+
+    if datetime.utcnow() > token_data["expires_at"]:
+        raise HTTPException(status_code=400, detail="Token expired")
+
+    return {"message": "Token is valid"}
+
+
+# ===============================================
 # 🔐 Reset Password
 # ===============================================
 @router.post("/reset-password")

@@ -13,3 +13,4 @@ pymongo==4.9.2
 motor==3.6.0
 pytz==2024.1
 strawberry-graphql[fastapi]==0.234.2
+fastapi[all]

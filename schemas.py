@@ -13,13 +13,16 @@ class UserCreate(BaseModel):
 
     @validator("username")
     def username_alphanumeric(cls, v):
-        assert v.isalnum(), "Username must be alphanumeric"
+        assert all(c.isalnum() or c in "-_" for c in v), "Username can only contain letters, numbers, hyphens, and underscores"
         assert len(v) >= 3, "Username must be at least 3 characters"
         return v
 
     @validator("password")
     def password_strength(cls, v):
         assert len(v) >= 8, "Password must be at least 8 characters"
+        assert any(c.islower() for c in v), "Password must contain at least one lowercase letter"
+        assert any(c.isupper() for c in v), "Password must contain at least one uppercase letter"
+        assert any(c.isdigit() for c in v), "Password must contain at least one digit"
         return v
 
 
@@ -64,6 +67,9 @@ class ResetPasswordRequest(BaseModel):
     @validator("new_password")
     def password_strength(cls, v):
         assert len(v) >= 8, "Password must be at least 8 characters"
+        assert any(c.islower() for c in v), "Password must contain at least one lowercase letter"
+        assert any(c.isupper() for c in v), "Password must contain at least one uppercase letter"
+        assert any(c.isdigit() for c in v), "Password must contain at least one digit"
         return v
 
 
