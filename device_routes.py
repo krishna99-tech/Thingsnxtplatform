@@ -6,6 +6,9 @@ import asyncio
 import secrets
 import json
 import logging
+import httpx
+import hmac
+import hashlib
 from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 
@@ -137,6 +140,13 @@ class LedTimerCreate(BaseModel):
     )
 
 
+class WebhookCreate(BaseModel):
+    url: str = Field(..., description="Webhook URL to receive events")
+    events: List[str] = Field(default=["telemetry_update"], description="List of events to subscribe to")
+    secret: Optional[str] = Field(None, description="Optional secret for webhook signature")
+    device_id: Optional[str] = Field(None, description="Optional device ID to filter events")
+
+
 # Notification storage for SSE
 notification_streams: Dict[str, asyncio.Queue] = {}
 
@@ -200,6 +210,104 @@ async def create_notification(
             "notification": notification_payload,
         },
     )
+
+
+# -------------------------------
+# 🔹 WEBHOOK HELPERS
+# -------------------------------
+async def trigger_webhooks(device_id: ObjectId, user_id: ObjectId, event_type: str, payload: Dict[str, Any]):
+    """
+    Trigger webhooks for a given event.
+    Webhooks are filtered by user_id, device_id (if specified), and event_type.
+    """
+    try:
+        # Find all active webhooks for this user
+        query = {
+            "user_id": user_id,
+            "active": True,
+            "events": {"$in": [event_type, "all"]}
+        }
+        
+        # If device_id is provided, also check for device-specific webhooks
+        if device_id:
+            query["$or"] = [
+                {"device_id": None},  # Global webhooks
+                {"device_id": device_id}  # Device-specific webhooks
+            ]
+        
+        async for webhook in db.webhooks.find(query):
+            webhook_url = webhook.get("url")
+            if not webhook_url:
+                continue
+            
+            webhook_secret = webhook.get("secret")
+            webhook_id = webhook.get("_id")
+            
+            # Prepare webhook payload
+            webhook_payload = {
+                "event": event_type,
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": payload,
+            }
+            
+            # Add signature if secret is provided
+            headers = {"Content-Type": "application/json"}
+            if webhook_secret:
+                signature = hmac.new(
+                    webhook_secret.encode(),
+                    json.dumps(webhook_payload).encode(),
+                    hashlib.sha256
+                ).hexdigest()
+                headers["X-Webhook-Signature"] = f"sha256={signature}"
+            
+            # Send webhook asynchronously (fire and forget)
+            asyncio.create_task(send_webhook(webhook_id, webhook_url, webhook_payload, headers))
+            
+    except Exception as e:
+        logger.error(f"Error triggering webhooks: {e}", exc_info=True)
+
+
+async def send_webhook(webhook_id: ObjectId, url: str, payload: Dict[str, Any], headers: Dict[str, str]):
+    """
+    Send a webhook HTTP POST request.
+    Updates webhook stats on success/failure.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            
+            # Update webhook stats
+            await db.webhooks.update_one(
+                {"_id": webhook_id},
+                {
+                    "$set": {
+                        "last_triggered": datetime.utcnow(),
+                        "last_status": "success",
+                    },
+                    "$inc": {"trigger_count": 1}
+                }
+            )
+            logger.debug(f"Webhook {webhook_id} sent successfully to {url}")
+            
+    except httpx.TimeoutException:
+        logger.warning(f"Webhook {webhook_id} timeout for {url}")
+        await db.webhooks.update_one(
+            {"_id": webhook_id},
+            {
+                "$set": {"last_status": "timeout"},
+                "$inc": {"error_count": 1}
+            }
+        )
+    except Exception as e:
+        logger.error(f"Webhook {webhook_id} failed for {url}: {e}")
+        await db.webhooks.update_one(
+            {"_id": webhook_id},
+            {
+                "$set": {"last_status": "error", "last_error": str(e)},
+                "$inc": {"error_count": 1}
+            }
+        )
 
 
 # -------------------------------
@@ -645,37 +753,28 @@ async def push_telemetry(data: TelemetryData):
         {"$set": {"status": "online", "last_active": now}},
     )
     
-    # Notify if device came back online
-    if was_offline:
-        # Broadcast status update via global SSE
-        asyncio.create_task(event_manager.broadcast({
+    # Broadcast status update via WebSocket immediately
+    await manager.broadcast(
+        user_id,
+        {
             "type": "status_update",
             "device_id": str(device_id),
             "status": "online",
-            "timestamp": now.isoformat()
-        }))
-
-        # Broadcast status update via WebSocket
-        device = await db.devices.find_one({"_id": device_id})
-        if device:
-            await manager.broadcast(
-                str(device["user_id"]),
-                {
-                    "type": "status_update",
-                    "device_id": str(device_id),
-                    "status": "online",
-                    "timestamp": now.isoformat(),
-                },
-            )
-            # Create notification for device coming online
-            await create_notification(
-                device["user_id"],
-                "Device Online",
-                f"{device.get('name', 'Device')} is now online",
-                "success",
-                f"Device reconnected at {now.strftime('%I:%M %p')}",
-                device_id,
-            )
+            "timestamp": now.isoformat(),
+        },
+    )
+    
+    # Notify if device came back online
+    if was_offline:
+        # Create notification for device coming online
+        await create_notification(
+            device["user_id"],
+            "Device Online",
+            f"{device.get('name', 'Device')} is now online",
+            "success",
+            f"Device reconnected at {now.strftime('%I:%M %p')}",
+            device_id,
+        )
 
     # 3️⃣ ✅ Update all widgets linked to this device
     async for widget in db.widgets.find({"device_id": device_id}):
@@ -692,15 +791,6 @@ async def push_telemetry(data: TelemetryData):
                 }
             )
 
-    # Broadcast telemetry data via global SSE
-    asyncio.create_task(event_manager.broadcast({
-        "type": "telemetry_update",
-        "device_id": str(device_id),
-        "timestamp": now.isoformat(),
-        "data": payload,
-    }))
-
-
     # 4️⃣ Broadcast to WebSocket clients for real-time updates
     try:
         await manager.broadcast(
@@ -712,19 +802,37 @@ async def push_telemetry(data: TelemetryData):
                 "data": payload,
             },
         )
+        
+        # Also broadcast via global SSE event manager
+        asyncio.create_task(event_manager.broadcast({
+            "type": "telemetry_update",
+            "device_id": str(device_id),
+            "timestamp": now.isoformat(),
+            "data": payload,
+        }))
     except Exception as e:
-        logger.warning(f"Failed to broadcast telemetry update for device {device_id}: {e}")
+        logger.error(f"Failed to broadcast telemetry update: {e}")
 
-    # 5️⃣ Include LED state if available (for backward compatibility)
-    led_state_doc = await db.telemetry.find_one({"device_id": device_id, "key": "led_state"})
-    led_state = led_state_doc.get("value") if led_state_doc else None
+    # 5️⃣ Trigger webhooks if configured
+    try:
+        await trigger_webhooks(device_id, user_id, "telemetry_update", {
+            "device_id": str(device_id),
+            "timestamp": now.isoformat(),
+            "data": payload,
+        })
+    except Exception as e:
+        logger.error(f"Failed to trigger webhooks: {e}")
 
     logger.debug(f"Telemetry updated for device {device_id}: {len(payload)} keys")
+    
+    # Extract LED state if present
+    led_state = payload.get("led") or payload.get("v0") or 0
+    
     return {
         "message": "ok",
         "device_id": str(device_id),
         "led": led_state,
-        "updated_data": payload,
+        "updated_data": payload, # This is for the device's response, not the broadcast
         "timestamp": now.isoformat(),
     }
 
@@ -1444,14 +1552,6 @@ async def auto_offline_checker():
                         {"_id": device["_id"]},
                         {"$set": {"status": "offline"}},
                     )
-                    # Broadcast status update via global SSE
-                    asyncio.create_task(event_manager.broadcast({
-                        "type": "status_update",
-                        "device_id": str(device["_id"]),
-                        "status": "offline",
-                        "timestamp": now.isoformat()
-                    }))
-
                     # Broadcast status update via WebSocket
                     await manager.broadcast(
                         str(device["user_id"]),
@@ -1471,6 +1571,156 @@ async def auto_offline_checker():
                         f"Device last seen: {last_active.strftime('%I:%M %p') if last_active else 'Unknown'}\nTimeout: {OFFLINE_TIMEOUT} seconds",
                         device["_id"],
                     )
-        except Exception as e:
-            print("auto-offline error:", e)
-        await asyncio.sleep(OFFLINE_TIMEOUT)
+        except Exception as exc:
+            logger.error(f"Error in auto_offline_checker: {exc}", exc_info=True)
+        finally:
+            # Sleep for 60 seconds before checking again
+            await asyncio.sleep(60)
+
+
+# ============================================================
+# 🔗 WEBHOOK ROUTES
+# ============================================================
+@router.post("/webhooks")
+async def create_webhook(
+    webhook: WebhookCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Create a webhook to receive real-time device events."""
+    user_id = safe_oid(current_user["id"])
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    # Validate URL
+    if not webhook.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Invalid webhook URL. Must start with http:// or https://")
+    
+    # Validate device_id if provided
+    device_oid = None
+    if webhook.device_id:
+        device_oid = safe_oid(webhook.device_id)
+        if device_oid is None:
+            raise HTTPException(status_code=400, detail="Invalid device ID")
+        # Verify device belongs to user
+        device = await db.devices.find_one({"_id": device_oid, "user_id": user_id})
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Generate secret if not provided
+    secret = webhook.secret or secrets.token_urlsafe(32)
+    
+    webhook_doc = {
+        "user_id": user_id,
+        "url": webhook.url,
+        "events": webhook.events or ["telemetry_update"],
+        "secret": secret,
+        "device_id": device_oid,
+        "active": True,
+        "created_at": datetime.utcnow(),
+        "trigger_count": 0,
+        "error_count": 0,
+    }
+    
+    result = await db.webhooks.insert_one(webhook_doc)
+    new_webhook = await db.webhooks.find_one({"_id": result.inserted_id})
+    return doc_to_dict(new_webhook)
+
+
+@router.get("/webhooks")
+async def list_webhooks(current_user: dict = Depends(get_current_user)):
+    """List all webhooks for the current user."""
+    user_id = safe_oid(current_user["id"])
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid user ID")
+    
+    webhooks = []
+    async for webhook in db.webhooks.find({"user_id": user_id}).sort("created_at", -1):
+        webhook_dict = doc_to_dict(webhook)
+        # Don't expose secret in list
+        if "secret" in webhook_dict:
+            webhook_dict["secret"] = "***" if webhook_dict.get("secret") else None
+        webhooks.append(webhook_dict)
+    
+    return {"webhooks": webhooks}
+
+
+@router.get("/webhooks/{webhook_id}")
+async def get_webhook(
+    webhook_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get a specific webhook by ID."""
+    user_id = safe_oid(current_user["id"])
+    webhook_oid = safe_oid(webhook_id)
+    
+    if user_id is None or webhook_oid is None:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+    
+    webhook = await db.webhooks.find_one({"_id": webhook_oid, "user_id": user_id})
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    
+    webhook_dict = doc_to_dict(webhook)
+    # Don't expose full secret
+    if "secret" in webhook_dict and webhook_dict.get("secret"):
+        webhook_dict["secret"] = "***"
+    
+    return webhook_dict
+
+
+@router.delete("/webhooks/{webhook_id}")
+async def delete_webhook(
+    webhook_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a webhook."""
+    user_id = safe_oid(current_user["id"])
+    webhook_oid = safe_oid(webhook_id)
+    
+    if user_id is None or webhook_oid is None:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+    
+    result = await db.webhooks.delete_one({"_id": webhook_oid, "user_id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    
+    return {"message": "Webhook deleted"}
+
+
+@router.patch("/webhooks/{webhook_id}")
+async def update_webhook(
+    webhook_id: str,
+    body: Dict[str, Any],
+    current_user: dict = Depends(get_current_user),
+):
+    """Update a webhook (activate/deactivate, change URL, etc.)."""
+    user_id = safe_oid(current_user["id"])
+    webhook_oid = safe_oid(webhook_id)
+    
+    if user_id is None or webhook_oid is None:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+    
+    webhook = await db.webhooks.find_one({"_id": webhook_oid, "user_id": user_id})
+    if not webhook:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    
+    # Allowed fields for update
+    allowed = {"url", "events", "active", "secret"}
+    update_fields = {}
+    for k in allowed:
+        if k in body:
+            update_fields[k] = body[k]
+    
+    if not update_fields:
+        return {"message": "no_changes", "webhook": doc_to_dict(webhook)}
+    
+    update_fields["updated_at"] = datetime.utcnow()
+    
+    await db.webhooks.update_one({"_id": webhook_oid}, {"$set": update_fields})
+    updated_webhook = await db.webhooks.find_one({"_id": webhook_oid})
+    
+    webhook_dict = doc_to_dict(updated_webhook)
+    if "secret" in webhook_dict and webhook_dict.get("secret"):
+        webhook_dict["secret"] = "***"
+    
+    return webhook_dict

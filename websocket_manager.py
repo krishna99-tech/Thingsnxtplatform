@@ -73,26 +73,25 @@ class ConnectionManager:
             logger.debug(f"No active connections for user {user_id}")
             return
         
-        # Create a copy of the list to avoid modification during iteration
+        # Create a copy of the list to iterate over, allowing safe modification of the original list
+        connections_to_broadcast = conns[:]
         dead_connections = []
         
-        for ws in conns[:]:
+        for ws in connections_to_broadcast:
             # Skip excluded websocket
             if exclude_websocket and ws == exclude_websocket:
                 continue
                 
             try:
                 await ws.send_json(message)
-            except Exception as e:
-                logger.warning(f"Failed to send message to user {user_id}: {e}")
+            except Exception: # Catches various connection errors (e.g., ConnectionClosed, RuntimeError)
+                # If sending fails, the connection is considered dead.
                 dead_connections.append(ws)
         
         # Clean up dead connections
         for ws in dead_connections:
+            logger.warning(f"Found dead connection for user {user_id}. Cleaning up.")
             self.disconnect(user_id, ws)
-        
-        if dead_connections:
-            logger.info(f"Cleaned up {len(dead_connections)} dead connection(s) for user {user_id}")
 
     async def broadcast_to_all(self, message: dict):
         """
