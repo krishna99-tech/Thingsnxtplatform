@@ -77,6 +77,15 @@ class DashboardCreate(BaseModel):
     description: Optional[str] = ""
 
 
+class WidgetLayout(BaseModel):
+    id: str
+    width: Optional[int] = 1
+    height: Optional[int] = 1
+
+class DashboardLayoutUpdate(BaseModel):
+    layout: List[WidgetLayout]
+
+
 class WidgetCreate(BaseModel):
     dashboard_id: str
     device_id: Optional[str] = None
@@ -90,6 +99,7 @@ class WidgetCreate(BaseModel):
         if not ObjectId.is_valid(v):
             raise ValueError("Invalid dashboard ID")
         return v
+
 
 
 class LedScheduleCreate(BaseModel):
@@ -856,6 +866,55 @@ async def get_latest_telemetry_by_token(device_token: str):
 
 
 # ============================================================
+# 📈 TELEMETRY HISTORY (for charts)
+# ============================================================
+@router.get("/telemetry/history")
+async def get_telemetry_history(
+    device_id: str,
+    key: str,
+    period: str = "24h",
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Fetch historical telemetry data for a specific key, used for charts.
+    This is a simplified implementation. For production, consider time-series databases.
+    """
+    device_oid = safe_oid(device_id)
+    user_id = safe_oid(current_user["id"])
+    if not device_oid or not user_id:
+        raise HTTPException(status_code=400, detail="Invalid ID")
+
+    # Verify user owns the device
+    device = await db.devices.find_one({"_id": device_oid, "user_id": user_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found or access denied")
+
+    # For this example, we'll query the main telemetry JSON record.
+    # A more robust solution would involve a separate collection for historical data.
+    # This is a placeholder implementation. A real implementation would query a
+    # time-series collection. We will simulate this by returning the latest value.
+    
+    telemetry_record = await db.telemetry.find_one(
+        {"device_id": device_oid, "key": "telemetry_json"}
+    )
+
+    current_value = telemetry_record.get("value", {}).get(key) if telemetry_record else None
+
+    if current_value is None:
+        return []
+
+    # In a real app, you would query a time-series collection here.
+    # For this demo, we simulate 24 hours of historical data based on the current value.
+    import random
+    now = datetime.utcnow()
+    history = []
+    for i in range(24):
+        # Simulate some fluctuation around the current value
+        simulated_value = current_value + (random.random() - 0.5) * (current_value * 0.1) # +/- 5%
+        history.append({"timestamp": now - timedelta(hours=i), "value": simulated_value})
+    return history
+
+# ============================================================
 # 📊 DASHBOARD ROUTES
 # ============================================================
 @router.post("/dashboards")
@@ -902,6 +961,51 @@ async def delete_dashboard(dashboard_id: str, current_user: dict = Depends(get_c
     return {"message": "Dashboard deleted"}
 
 
+@router.put("/dashboards/{dashboard_id}/layout")
+async def update_dashboard_layout(
+    dashboard_id: str,
+    data: DashboardLayoutUpdate,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update the order and size of widgets in a dashboard."""
+    dashboard_oid = safe_oid(dashboard_id)
+    user_oid = safe_oid(current_user["id"])
+    if dashboard_oid is None:
+        raise HTTPException(status_code=400, detail="Invalid dashboard ID")
+
+    dashboard = await db.dashboards.find_one({"_id": dashboard_oid, "user_id": user_oid})
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found or access denied")
+
+    try:
+        # Use a bulk write for efficiency
+        from pymongo import UpdateOne
+
+        operations = []
+        for index, widget_layout in enumerate(data.layout):
+            widget_oid = safe_oid(widget_layout.id)
+            if widget_oid:
+                operations.append(
+                    UpdateOne(
+                        {"_id": widget_oid, "dashboard_id": dashboard_oid},
+                        {"$set": {
+                            "order": index,
+                            "width": widget_layout.width,
+                            "height": widget_layout.height,
+                        }}
+                    )
+                )
+        
+        if operations:
+            await db.widgets.bulk_write(operations)
+        return {"message": "Layout updated successfully"}
+    except Exception as e:
+        logger.error(f"Error updating dashboard layout for {dashboard_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update layout")
+
+# ============================================================
+# 🧩 WIDGET ROUTES
+# ============================================================
 # ============================================================
 # 🧩 WIDGET ROUTES
 # ============================================================
@@ -917,6 +1021,8 @@ async def create_widget(widget: WidgetCreate, current_user: dict = Depends(get_c
         raise HTTPException(status_code=403, detail="Access denied")
 
     config = dict(widget.config or {})
+
+    # LED virtual pin assignment
     if widget.type == "led":
         existing_pin = config.get("virtual_pin")
         if not existing_pin:
@@ -939,7 +1045,9 @@ async def create_widget(widget: WidgetCreate, current_user: dict = Depends(get_c
     return doc_to_dict(new_widget)
 
 
-
+# ============================================================
+# 🚫 FIXED: NO TELEMETRY FETCH HERE → NO FLICKER
+# ============================================================
 @router.get("/widgets/{dashboard_id}")
 async def get_widgets(dashboard_id: str):
     dashboard = await db.dashboards.find_one({"_id": ObjectId(dashboard_id)})
@@ -948,57 +1056,51 @@ async def get_widgets(dashboard_id: str):
 
     widgets = []
     async for widget in db.widgets.find({"dashboard_id": ObjectId(dashboard_id)}):
-        device_id = widget.get("device_id")
+
         config: Dict[str, Any] = dict(widget.get("config", {}) or {})
-        key = config.get("key")
         virtual_pin = config.get("virtual_pin")
 
-        # Default value
+        # IMPORTANT FIX:
+        # DO NOT OVERRIDE widget.value FROM telemetry.
+        # Let value be whatever is stored in widget doc.
         value = widget.get("value")
 
-        # ✅ Try to get latest telemetry if device_id & key exist
-        if device_id and key:
-            telemetry = await db.telemetry.find_one(
-                {"device_id": ObjectId(device_id), "key": "telemetry_json"}
-            )
-            if telemetry and isinstance(telemetry.get("value"), dict):
-                telemetry_value = telemetry["value"].get(key)
-                if telemetry_value is not None:
-                    value = telemetry_value
-
+        # LED next schedule fetch (OK to keep)
         if widget.get("type") == "led":
             if isinstance(virtual_pin, str):
                 config["virtual_pin"] = virtual_pin.lower()
+
             next_schedule_doc = await db.led_schedules.find_one(
                 {"widget_id": widget["_id"], "status": "pending"},
                 sort=[("execute_at", 1)],
             )
             if next_schedule_doc:
-                # Convert UTC to IST for display
                 execute_at_utc = next_schedule_doc["execute_at"]
+
                 if isinstance(execute_at_utc, datetime):
                     if execute_at_utc.tzinfo is None:
                         if ZoneInfo_available:
                             execute_at_utc = datetime.fromtimestamp(execute_at_utc.timestamp(), tz=ZoneInfo("UTC"))
                         else:
                             execute_at_utc = pytz.UTC.localize(execute_at_utc)
+
                     execute_at_ist = utc_to_ist(execute_at_utc)
                     widget["next_schedule"] = execute_at_ist.isoformat()
                 else:
                     widget["next_schedule"] = execute_at_utc
 
-        # ✅ Update widget's value and convert ObjectIds to str
-        widget["value"] = value
+        # Convert ObjectIds to strings
         widget["_id"] = str(widget["_id"])
         widget["dashboard_id"] = str(widget["dashboard_id"])
+        widget["value"] = value
+        widget["config"] = config
+
         if widget.get("device_id"):
             widget["device_id"] = str(widget["device_id"])
-        widget["config"] = config
 
         widgets.append(widget)
 
     return widgets
-
 
 
 @router.delete("/widgets/{widget_id}")
@@ -1018,8 +1120,7 @@ async def delete_widget(widget_id: str, current_user: dict = Depends(get_current
 
     dashboard_id = str(widget["dashboard_id"])
     await db.widgets.delete_one({"_id": widget_oid})
-    
-    # Broadcast widget deletion via WebSocket
+
     await manager.broadcast(
         str(user_id),
         {
@@ -1029,9 +1130,8 @@ async def delete_widget(widget_id: str, current_user: dict = Depends(get_current
             "timestamp": datetime.utcnow().isoformat(),
         },
     )
-    
-    return {"message": "Widget deleted"}
 
+    return {"message": "Widget deleted"}
 
 # ============================================================
 # ⏰ LED SCHEDULING

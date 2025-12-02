@@ -3,6 +3,7 @@ from jose import jwt, JWTError
 from db import db
 from websocket_manager import manager
 import os
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -11,8 +12,8 @@ from datetime import datetime
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# WebSocket connection timeout (30 seconds)
-WS_TIMEOUT = 30
+# WebSocket connection timeout (e.g., 45 seconds). Client should send a ping every 30s.
+WS_TIMEOUT = 45
 
 
 @router.websocket("/ws")
@@ -90,12 +91,17 @@ async def websocket_endpoint(websocket: WebSocket):
         # Main message loop
         while True:
             try:
-                # Receive message with timeout
-                msg = await websocket.receive_text()
+                # Wait for a message with a timeout.
+                # If the client doesn't send a ping within this time, it will raise TimeoutError.
+                msg = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=WS_TIMEOUT
+                )
                 
                 try:
                     data = json.loads(msg)
                     msg_type = data.get("type")
+                    logger.debug(f"User {user_id} received message type: {msg_type}")
                     
                     # Handle ping/pong for connection health
                     if msg_type == "ping":
@@ -119,10 +125,15 @@ async def websocket_endpoint(websocket: WebSocket):
                         "message": "Invalid JSON format",
                     })
                     
-            except WebSocketDisconnect:
-                logger.info(f"WebSocket disconnected for user {user_id}")
+            except asyncio.TimeoutError:
+                logger.warning(f"WebSocket timeout for user {user_id}. Closing connection.")
+                manager.disconnect(user_id, websocket)
                 break
-            except Exception as e:
+            except WebSocketDisconnect as e:
+                logger.info(f"WebSocket disconnected for user {user_id} (code: {e.code}, reason: {e.reason})")
+                manager.disconnect(user_id, websocket)
+                break
+            except Exception as e: # Catch other potential errors
                 logger.error(f"Error processing WebSocket message for user {user_id}: {e}")
                 try:
                     await websocket.send_json({
@@ -131,10 +142,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     })
                 except:
                     pass
+                manager.disconnect(user_id, websocket)
                 break
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for user {user_id}")
+        # This can catch disconnections that happen before the main loop
+        logger.info(f"WebSocket disconnected for user {user_id} during setup.")
     except Exception as e:
         logger.error(f"WebSocket error for user {user_id}: {e}", exc_info=True)
         try:
@@ -144,5 +157,4 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         # Clean up connection
         if user_id:
-            manager.disconnect(user_id, websocket)
             logger.info(f"WebSocket connection cleaned up for user {user_id}")
