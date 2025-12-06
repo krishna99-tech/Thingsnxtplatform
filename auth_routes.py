@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
+from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import secrets
 import logging
@@ -60,6 +61,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     return doc_to_dict(user)
 
 
+
 # ===============================================
 # 🧩 Signup Route
 # ===============================================
@@ -95,14 +97,9 @@ async def signup(user: UserCreate):
         "access_token": access,
         "refresh_token": refresh,
         "token_type": "bearer",
-        "user": {
-            "id": str(user_doc["_id"]),
-            "email": user.email,
-            "username": user.username,
-            "full_name": user.full_name,
-            "is_active": True,
-        },
+        "user": UserOut(**doc_to_dict(user_doc)),
     }
+
 
 
 # ===============================================
@@ -134,17 +131,15 @@ async def token(form_data: OAuth2PasswordRequestForm = Depends()):
         "access_token": access,
         "refresh_token": refresh,
         "token_type": "bearer",
-        "user": {
-            "id": str(user["_id"]),
-            "email": user.get("email"),
-            "username": user.get("username"),
-        },
+        "user": UserOut(**doc_to_dict(user)),
     }
 
 
 # ===============================================
 # 🔐 Login (JSON Body Version)
 # ===============================================
+
+
 @router.post("/login")
 async def login(user: UserLogin):
     user_db = await db.users.find_one(
@@ -171,11 +166,7 @@ async def login(user: UserLogin):
         "access_token": access,
         "refresh_token": refresh,
         "token_type": "bearer",
-        "user": {
-            "id": str(user_db["_id"]),
-            "email": user_db.get("email"),
-            "username": user_db.get("username"),
-        },
+        "user": UserOut(**doc_to_dict(user_db)),
     }
 
 
@@ -231,8 +222,49 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 
 # ===============================================
-# 🔐 Forgot Password
+# ✏️ Update Current User
 # ===============================================
+@router.put("/me", response_model=UserOut)
+async def update_me(
+    user_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update the current user's profile (username, email, etc.)."""
+    user_id = ObjectId(current_user["id"])
+    update_fields = {}
+    if "username" in user_data and user_data["username"]:
+        update_fields["username"] = user_data["username"]
+    if "email" in user_data and user_data["email"]:
+        update_fields["email"] = user_data["email"]
+
+    if not update_fields:
+        raise HTTPException(status_code=400, detail="No update fields provided")
+
+    await db.users.update_one({"_id": user_id}, {"$set": update_fields})
+    updated_user = await db.users.find_one({"_id": user_id})
+    return doc_to_dict(updated_user)
+
+# ===============================================
+# 🗑️ Delete Current User Account
+# ===============================================
+@router.delete("/me")
+async def delete_me(current_user: dict = Depends(get_current_user)):
+    """Deletes the current user's account and all associated data."""
+    user_id = ObjectId(current_user["id"])
+
+    # Perform deletions in parallel for efficiency
+    await db.users.delete_one({"_id": user_id})
+    await db.refresh_tokens.delete_many({"user_id": user_id})
+    await db.devices.delete_many({"user_id": user_id})
+    await db.dashboards.delete_many({"user_id": user_id})
+    # Add other collections to clean up if necessary (e.g., widgets, schedules)
+    # await db.widgets.delete_many({"user_id": user_id})
+
+    return {"message": "Account and all associated data deleted successfully"}
+
+
+# ===============================================
+# ==============================================
 @router.post("/forgot-password")
 async def forgot_password(request: ForgotPasswordRequest):
     user = await db.users.find_one({"email": request.email})

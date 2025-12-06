@@ -1,5 +1,6 @@
 import os
 import logging
+from pathlib import Path
 from dotenv import load_dotenv
 from passlib.context import CryptContext
 from jose import jwt
@@ -7,6 +8,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from jinja2 import Environment, FileSystemLoader
 from bson import ObjectId
 
 # Load environment variables from .env file
@@ -38,6 +40,11 @@ if not SECRET_KEY:
         "Generate a secure key (see secretkey.py) and export SECRET_KEY before starting the server."
     )
 
+# Setup Jinja2 environment
+template_dir = Path(__file__).parent / "templates"
+if not template_dir.is_dir():
+    raise RuntimeError(f"Template directory not found at {template_dir}")
+jinja_env = Environment(loader=FileSystemLoader(template_dir))
 # ============================================================
 # 🔐 Password + JWT Utilities
 # ============================================================
@@ -62,7 +69,8 @@ def create_refresh_token(data: dict):
 # ============================================================
 # ✉️ Email Utility
 # ============================================================
-def send_reset_email(email: str, token: str):
+def send_reset_email(email: str, token: str) -> bool:
+    """Sends a password reset email using Jinja2 templates."""
     try:
         if not EMAIL_USER or not EMAIL_PASSWORD:
             logger.warning(
@@ -72,68 +80,49 @@ def send_reset_email(email: str, token: str):
             )
             return False
 
-        # Use environment variables for production-ready configuration
+        # 1. Prepare template context from environment variables
         app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
-        company_name = os.getenv("COMPANY_NAME", "ThingsNXT")
         frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        app_scheme = os.getenv("APP_SCHEME")  # No default, button will be conditional
-        copyright_text = f"© {datetime.now().year} {company_name}"
+        app_scheme = os.getenv("APP_SCHEME")
 
-        web_reset_link = f"{frontend_url}/reset-password?token={token}"
+        context = {
+            "token": token,
+            "app_name": app_name,
+            "frontend_url": frontend_url,
+            "web_reset_link": f"{frontend_url}/reset-password?token={token}",
+            "app_reset_link": f"{app_scheme}://reset-password?token={token}" if app_scheme else None,
+            "copyright_text": f"© {datetime.now().year} {os.getenv('COMPANY_NAME', 'ThingsNXT')}",
+        }
 
-        # Conditionally create the "Reset on App" button
-        # This prevents showing a dead link if no APP_SCHEME is configured
-        app_button_html = ""
-        if app_scheme:
-            app_reset_link = f"{app_scheme}://reset-password?token={token}"
-            app_button_html = f'<a href="{app_reset_link}" style="flex:1;display:inline-block;background:#34c759;color:#fff;text-decoration:none;font-weight:bold;padding:12px 16px;border-radius:6px;font-size:14px;text-align:center;">📱 Reset on App</a>'
-
+        # 2. Setup email message
         message = MIMEMultipart("alternative")
         message["Subject"] = f"{app_name} — Password Reset Request"
         message["From"] = EMAIL_FROM or EMAIL_USER
         message["To"] = email
 
-        html = f"""
-        <html>
-            <body style="font-family: Arial, sans-serif; background: #FAFAFA; padding: 32px;">
-                <div style="max-width:480px;margin:auto;background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);padding:32px;">
-                    <h2 style="color:#007aff;margin-bottom:6px;margin-top:0;">{app_name}</h2>
-                    <h3 style="color:#333;margin-bottom:18px;margin-top:0;">Password Reset Request</h3>
-                    <p style="font-size:15px;color:#222;line-height:1.6;">
-                        You requested to reset your password for <b>{app_name}</b>.
-                        <br>If you did not request this, you can safely ignore this email.
-                    </p>
-                    <p style="font-size:15px;margin-top:18px;color:#333;">Use this <b>reset code</b>:</p>
-                    <div style="background:#f4f4f4;padding:18px 0;border-radius:7px;text-align:center;font-size:20px;letter-spacing:2px;margin:12px 0 20px 0;color:#111;border:1px solid #eee;font-weight:bold;font-family:monospace;">
-                        {token}
-                    </div>
-                    <p style="color:#444;font-size:15px;">Choose how to reset your password:</p>
-                    <div style="display:flex;gap:10px;margin:15px 0;">
-                        <a href="{web_reset_link}" style="flex:1;display:inline-block;background:#007aff;color:#fff;text-decoration:none;font-weight:bold;padding:12px 16px;border-radius:6px;font-size:14px;text-align:center;">🌐 Reset on Web</a>
-                        {app_button_html}
-                    </div>
-                    <hr style="margin:24px 0;border:none;border-top:1px solid #eee;">
-                    <div style="font-size:12px;color:#888;text-align:center;line-height:18px;">
-                        {copyright_text}<br>
-                        <a href="{frontend_url}" style="color:#aaa;text-decoration:none;">{frontend_url}</a>
-                    </div>
-                </div>
-            </body>
-        </html>
-        """
+        # 3. Render and attach both HTML and plain text parts
+        try:
+            html_template = jinja_env.get_template("email_reset.html")
+            text_template = jinja_env.get_template("email_reset.txt")
+            html_body = html_template.render(context)
+            text_body = text_template.render(context)
+            
+            message.attach(MIMEText(text_body, "plain"))
+            message.attach(MIMEText(html_body, "html"))
+        except Exception as e:
+            logger.error(f"Failed to render email template: {e}", exc_info=True)
+            return False
 
-        part = MIMEText(html, "html")
-        message.attach(part)
-        
+        # 4. Send the email
         with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
             server.ehlo()
             server.starttls()
             server.login(EMAIL_USER, EMAIL_PASSWORD)
             server.sendmail(EMAIL_FROM or EMAIL_USER, email, message.as_string())
-        
+
         logger.info(f"Password reset email sent successfully to {email}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
         return False

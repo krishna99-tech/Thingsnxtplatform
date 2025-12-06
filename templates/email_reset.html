@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>{{ app_name }} Password Reset</title>
+</head>
+<body style="margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; background-color: #f8f9fa;">
+    <!-- Visually hidden preheader text -->
+    <div style="display: none; font-size: 1px; line-height: 1px; max-height: 0px; max-width: 0px; opacity: 0; overflow: hidden;">
+        Use this code to reset your password or click the button below.
+    </div>
+
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+            <td style="padding: 32px 16px;">
+                <table role="presentation" align="center" border="0" cellpadding="0" cellspacing="0" style="max-width: 500px; width: 100%; margin: 0 auto; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 32px 32px 24px; text-align: left; border-bottom: 1px solid #e9ecef;">
+                            <h1 style="margin: 0; font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; color: #007aff;">
+                                {{ app_name }}
+                            </h1>
+                        </td>
+                    </tr>
+                    <!-- Body -->
+                    <tr>
+                        <td style="padding: 24px 32px; font-family: Arial, sans-serif; font-size: 16px; line-height: 1.6; color: #343a40;">
+                            <h2 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; color: #212529;">Password Reset Request</h2>
+                            <p style="margin: 0 0 16px;">You requested to reset your password. If you did not make this request, you can safely ignore this email.</p>
+                            <p style="margin: 0 0 12px;">Use this <strong>reset code</strong>:</p>
+                            <p style="margin: 0 0 24px; text-align: center; font-family: 'Courier New', Courier, monospace; font-size: 28px; font-weight: bold; letter-spacing: 4px; color: #000000; background-color: #f1f3f5; padding: 16px; border-radius: 8px; border: 1px solid #dee2e6;">
+                                {{ token }}
+                            </p>
+                            <p style="margin: 0 0 16px;">Alternatively, choose how to reset your password:</p>
+                            <!-- Buttons Table -->
+                            <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
+                                <tr>
+                                    <td style="padding-bottom: 16px;">
+                                        <a href="{{ web_reset_link }}" target="_blank" style="display: block; width: 100%; padding: 14px 0; font-family: Arial, sans-serif; font-size: 15px; font-weight: bold; color: #ffffff; text-decoration: none; text-align: center; background-color: #007aff; border-radius: 8px; box-sizing: border-box;">🌐 Reset on Web</a>
+                                    </td>
+                                </tr>
+                                {% if app_reset_link %}
+                                <tr>
+                                    <td>
+                                        <a href="{{ app_reset_link }}" target="_blank" style="display: block; width: 100%; padding: 14px 0; font-family: Arial, sans-serif; font-size: 15px; font-weight: bold; color: #ffffff; text-decoration: none; text-align: center; background-color: #34c759; border-radius: 8px; box-sizing: border-box;">📱 Reset on App</a>
+                                    </td>
+                                </tr>
+                                {% endif %}
+                            </table>
+                        </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 24px 32px; text-align: center; background-color: #f8f9fa; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px;">
+                            <p style="margin: 0; font-family: Arial, sans-serif; font-size: 13px; line-height: 1.5; color: #6c757d;">
+                                {{ copyright_text }}<br>
+                                <a href="{{ frontend_url }}" target="_blank" style="color: #6c757d; text-decoration: underline;">Visit our website</a>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
