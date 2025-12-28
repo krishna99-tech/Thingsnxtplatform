@@ -1,6 +1,11 @@
 # ThingsNXT Platform - Complete Function Flowchart
+---
+config:
+  theme: mc
+  look: neo
+  layout: dagre
+---
 
-```mermaid
 flowchart TB
     subgraph Main["🚀 main.py"]
         START[FastAPI App Start]

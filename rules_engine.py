@@ -63,11 +63,27 @@ class RulesEngine:
             return node[operation]
             
         return None
+    
+    class SafeNone:
+        """Object that evaluates to False but allows attribute access to prevent crashes"""
+        def __getattr__(self, item):
+            return self
+        def __bool__(self):
+            return False
+        def __eq__(self, other):
+            return other is None or isinstance(other, RulesEngine.SafeNone)
+        def __str__(self):
+            return ""
 
     class MockObject(dict):
         """Helper to allow dot notation access in eval context (e.g. auth.uid)"""
         def __getattr__(self, item):
-            return self.get(item)
+            val = self.get(item)
+            if isinstance(val, dict):
+                return RulesEngine.MockObject(val)
+            if val is None:
+                return RulesEngine.SafeNone()
+            return val
 
     async def validate_rule(self, collection_name: str, operation: str, user_id: Any, resource_data: Dict[str, Any], extra_context: Dict[str, Any] = None) -> bool:
         """
@@ -88,7 +104,11 @@ class RulesEngine:
         user_id_str = str(user_id) if user_id else None
         
         # Normalize resource data (ensure IDs are strings)
-        data_dict = self.MockObject(doc_to_dict(resource_data)) if resource_data else self.MockObject({})
+        if resource_data and isinstance(resource_data, dict) and "_id" not in resource_data:
+            # If already a dict without _id (e.g. custom context from device_routes), use as is
+            data_dict = self.MockObject(resource_data)
+        else:
+            data_dict = self.MockObject(doc_to_dict(resource_data)) if resource_data else self.MockObject({})
         
         context = {
             "auth": self.MockObject({"uid": user_id_str}),
@@ -105,6 +125,9 @@ class RulesEngine:
         root_matches = re.findall(r"root\.(\w+)\[([^\]]+)\]", rule_expr)
         
         # Create a custom RootAccess class for dynamic lookups
+        # Capture MockObject class for use in CollectionAccess to return safe empty objects
+        MockObjectCls = self.MockObject
+
         class RootAccess:
             def __init__(self, context_dict):
                 self._data = context_dict
@@ -134,12 +157,12 @@ class RulesEngine:
                 elif isinstance(key, str):
                     # Direct ID access
                     return self._get_document(key)
-                return None
+                return MockObjectCls({})
                 
             def _get_document(self, doc_id):
                 if doc_id in self._collection_data:
                     return self._collection_data[doc_id]
-                return None
+                return MockObjectCls({})
         
         # Fetch all referenced documents for root lookups
         fetched_collections = set()
@@ -156,7 +179,7 @@ class RulesEngine:
                 
                 if ref_id:
                     collection = getattr(db, col_name, None)
-                    if collection:
+                    if collection is not None:
                         try:
                             ref_doc = await collection.find_one({"_id": ObjectId(ref_id)})
                             if ref_doc:
@@ -185,7 +208,7 @@ class RulesEngine:
                     nested_ref_id = getattr(source_doc, source_field, None) or source_doc.get(source_field)
                     if nested_ref_id:
                         collection = getattr(db, target_col, None)
-                        if collection:
+                        if collection is not None:
                             try:
                                 ref_doc = await collection.find_one({"_id": ObjectId(nested_ref_id)})
                                 if ref_doc:

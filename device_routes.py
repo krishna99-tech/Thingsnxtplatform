@@ -96,11 +96,20 @@ class SecurityRules:
         # Validate telemetry write rule using rules engine
         # Telemetry can be written by device owner OR by device token
         device_dict = doc_to_dict(device)
+        
+        # Construct context mimicking the telemetry data structure expected by rules
+        # The rule expects 'data' to contain device_id to perform root.devices[data.device_id] check
+        telemetry_context = {
+            "device_id": str(device["_id"]),
+            "device_token": token,
+            **device_dict
+        }
+        
         is_allowed = await rules_engine.validate_rule(
             "telemetry", 
             ".write", 
             device_dict.get("user_id"), 
-            device_dict,
+            telemetry_context,
             {"device_token": token}
         )
         if not is_allowed:

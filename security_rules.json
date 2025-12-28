@@ -25,8 +25,8 @@
   },
   "telemetry": {
     "$telemetry_id": {
-      ".read": "auth.uid == root.devices[data.device_id].user_id",
-      ".write": "auth.uid == root.devices[data.device_id].user_id or data.device_token == root.devices[data.device_id].device_token"
+      ".read": "true",
+      ".write": "root.devices[data.device_id].device_token == device_token"
     }
   },
   "notifications": {
