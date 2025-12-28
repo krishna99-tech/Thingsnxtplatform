@@ -10,6 +10,32 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from jinja2 import Environment, FileSystemLoader
 from bson import ObjectId
+import pytz
+
+# ============================================================
+# 🕒 Timezone Support
+# ============================================================
+try:
+    from zoneinfo import ZoneInfo
+    try:
+        IST = ZoneInfo("Asia/Kolkata")
+        ZoneInfo_available = True
+    except Exception:
+        IST = pytz.timezone("Asia/Kolkata")
+        ZoneInfo_available = False
+except ImportError:
+    try:
+        from backports.zoneinfo import ZoneInfo
+        try:
+            IST = ZoneInfo("Asia/Kolkata")
+            ZoneInfo_available = True
+        except Exception:
+            IST = pytz.timezone("Asia/Kolkata")
+            ZoneInfo_available = False
+    except ImportError:
+        IST = pytz.timezone("Asia/Kolkata")
+        ZoneInfo_available = False
+        ZoneInfo = None
 
 # Load environment variables from .env file
 load_dotenv()
@@ -144,3 +170,38 @@ def doc_to_dict(doc):
         else:
             result[k] = v
     return result
+
+
+# ============================================================
+# 🕒 Timezone Helpers
+# ============================================================
+def get_ist_now():
+    """Get current time in Asia/Kolkata timezone."""
+    if ZoneInfo_available:
+        return datetime.now(IST)
+    else:
+        return pytz.UTC.localize(datetime.utcnow()).astimezone(IST)
+
+
+def utc_to_ist(utc_dt: datetime) -> datetime:
+    """Convert UTC datetime to IST."""
+    if ZoneInfo_available:
+        if utc_dt.tzinfo is None:
+            utc_dt = datetime.fromtimestamp(utc_dt.timestamp(), tz=ZoneInfo("UTC"))
+        return utc_dt.astimezone(IST)
+    else:
+        if utc_dt.tzinfo is None:
+            utc_dt = pytz.UTC.localize(utc_dt)
+        return utc_dt.astimezone(IST)
+
+
+def ist_to_utc(ist_dt: datetime) -> datetime:
+    """Convert IST datetime to UTC."""
+    if ZoneInfo_available:
+        if ist_dt.tzinfo is None:
+            ist_dt = datetime.fromtimestamp(ist_dt.timestamp(), tz=IST)
+        return ist_dt.astimezone(ZoneInfo("UTC"))
+    else:
+        if ist_dt.tzinfo is None:
+            ist_dt = IST.localize(ist_dt)
+        return ist_dt.astimezone(pytz.UTC)

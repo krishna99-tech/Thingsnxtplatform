@@ -20,6 +20,7 @@ class UserCreate(BaseModel):
     @validator("password")
     def password_strength(cls, v):
         assert len(v) >= 8, "Password must be at least 8 characters"
+        assert len(v) <= 72, "Password must be at most 72 characters"
         assert any(c.islower() for c in v), "Password must contain at least one lowercase letter"
         assert any(c.isupper() for c in v), "Password must contain at least one uppercase letter"
         assert any(c.isdigit() for c in v), "Password must contain at least one digit"

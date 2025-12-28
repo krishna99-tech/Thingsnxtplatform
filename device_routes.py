@@ -9,43 +9,37 @@ import logging
 import httpx
 import hmac
 import hashlib
-from pydantic import BaseModel, Field, validator
 from typing import Optional, Dict, Any, List
 
 from db import db
-from utils import OFFLINE_TIMEOUT, doc_to_dict
+from utils import (
+    OFFLINE_TIMEOUT, 
+    doc_to_dict, 
+    get_ist_now, 
+    utc_to_ist, 
+    ist_to_utc, 
+    IST, 
+    ZoneInfo_available,
+    ZoneInfo
+)
 from websocket_manager import manager
 from event_manager import event_manager # 👈 Import the global event manager
 from auth_routes import get_current_user
+from rules_engine import rules_engine # 👈 Import the new rules engine
+from models import (
+    DeviceCreate,
+    TelemetryData,
+    DashboardCreate,
+    WidgetLayout,
+    DashboardLayoutUpdate,
+    WidgetCreate,
+    LedScheduleCreate,
+    LedTimerCreate,
+    WebhookCreate,
+    DeviceBulkStatusUpdate
+)
 
 logger = logging.getLogger(__name__)
-
-# Timezone support
-import pytz  # Import pytz first as fallback
-try:
-    from zoneinfo import ZoneInfo
-    try:
-        # Test if tzdata is available
-        IST = ZoneInfo("Asia/Kolkata")
-        ZoneInfo_available = True
-    except Exception:
-        # tzdata not available, fall back to pytz
-        IST = pytz.timezone("Asia/Kolkata")
-        ZoneInfo_available = False
-except ImportError:
-    # Python < 3.9 fallback
-    try:
-        from backports.zoneinfo import ZoneInfo
-        try:
-            IST = ZoneInfo("Asia/Kolkata")
-            ZoneInfo_available = True
-        except Exception:
-            IST = pytz.timezone("Asia/Kolkata")
-            ZoneInfo_available = False
-    except ImportError:
-        IST = pytz.timezone("Asia/Kolkata")
-        ZoneInfo_available = False
-        ZoneInfo = None
 
 
 
@@ -59,102 +53,51 @@ def safe_oid(value: str) -> Optional[ObjectId]:
     return ObjectId(value) if ObjectId.is_valid(value) else None
 
 
-# =====================
-# Pydantic Models
-# =====================
+# ============================================================
+# 🔒 FIREBASE-LIKE SECURITY RULES ENGINE
+# ============================================================
+# This class now delegates logic to rules_engine.py which loads
+# rules from security_rules.json.
+# ============================================================
+class SecurityRules:
+    @staticmethod
+    async def verify_ownership(collection, resource_id: str, user_id: ObjectId, resource_name: str = "Resource") -> Dict[str, Any]:
+        """
+        Enforces .read/.write rule: auth.uid === resource.user_id
+        """
+        oid = safe_oid(resource_id)
+        if not oid:
+            raise HTTPException(status_code=400, detail=f"Invalid {resource_name} ID")
 
-class DeviceCreate(BaseModel):
-    name: Optional[str] = Field("Unnamed Device", max_length=100)
+        resource = await collection.find_one({"_id": oid})
+        if not resource:
+            raise HTTPException(status_code=404, detail=f"{resource_name} not found")
 
-
-class TelemetryData(BaseModel):
-    device_token: str
-    data: Dict[str, Any] = Field(default_factory=dict)
-
-
-class DashboardCreate(BaseModel):
-    name: str
-    description: Optional[str] = ""
-
-
-class WidgetLayout(BaseModel):
-    id: str
-    width: Optional[int] = 1
-    height: Optional[int] = 1
-
-class DashboardLayoutUpdate(BaseModel):
-    layout: List[WidgetLayout]
-
-
-class WidgetCreate(BaseModel):
-    dashboard_id: str
-    device_id: Optional[str] = None
-    type: Optional[str] = "telemetry"
-    label: Optional[str] = None
-    value: Optional[Any] = None
-    config: Dict[str, Any] = Field(default_factory=dict)
-
-    @validator("dashboard_id")
-    def validate_dashboard_id(cls, v):
-        if not ObjectId.is_valid(v):
-            raise ValueError("Invalid dashboard ID")
-        return v
-
-
-
-class LedScheduleCreate(BaseModel):
-    state: bool = Field(..., description="Target LED state")
-    execute_at: datetime = Field(..., description="IST datetime to apply the state")
-    label: Optional[str] = Field(
-        None, max_length=100, description="Optional label for the scheduled task"
-    )
-
-    @validator("execute_at")
-    def validate_execute_at(cls, v: datetime) -> datetime:
-        # Convert to UTC for storage if timezone-aware, otherwise assume IST
-        if v.tzinfo is None:
-            # Assume input is in IST if no timezone info
-            if ZoneInfo_available:
-                v = datetime.fromtimestamp(v.timestamp(), tz=IST)
-            else:
-                v = IST.localize(v)
-        else:
-            # If timezone-aware, ensure it's in IST
-            if ZoneInfo_available:
-                if v.tzinfo != IST:
-                    v = v.astimezone(IST)
-            else:
-                # For pytz, need to check differently
-                if v.tzinfo != IST:
-                    v = v.astimezone(IST)
+        # Determine collection name for rules lookup (e.g. db.devices -> "devices")
+        collection_name = collection.name
         
-        # Ensure both are timezone-aware before comparison
-        now_ist = get_ist_now()
-        # Both should be timezone-aware now, safe to compare
-        if v <= now_ist:
-            raise ValueError("Schedule time must be in the future")
+        is_allowed = await rules_engine.validate_rule(collection_name, ".write", user_id, resource)
+        if not is_allowed:
+             raise HTTPException(status_code=403, detail="Access denied by security rules")
+
+        return resource
+
+    @staticmethod
+    async def verify_device_token(token: str) -> Dict[str, Any]:
+        """
+        Enforces telemetry .write rule: device_token === resource.token
+        """
+        if not token:
+            raise HTTPException(status_code=400, detail="Missing device_token")
+        device = await db.devices.find_one({"device_token": token})
+        if not device:
+            raise HTTPException(status_code=404, detail="Device not found")
+            
+        # For telemetry, we might check a specific rule or assume token possession is enough
+        # If we want to use the engine:
+        # await rules_engine.validate_rule("telemetry", ".write", None, device, {"device_token": token})
         
-        # Return UTC for storage (timezone-naive UTC)
-        utc_dt = ist_to_utc(v)
-        # Return timezone-naive UTC for MongoDB storage
-        if utc_dt.tzinfo:
-            return utc_dt.replace(tzinfo=None)
-        return utc_dt
-
-
-class LedTimerCreate(BaseModel):
-    state: bool = Field(..., description="Target LED state when timer elapses")
-    duration_seconds: int = Field(..., gt=0, le=24 * 60 * 60, description="Timer duration in seconds (max 24h)")
-    label: Optional[str] = Field(
-        None, max_length=100, description="Optional label for the timer"
-    )
-
-
-class WebhookCreate(BaseModel):
-    url: str = Field(..., description="Webhook URL to receive events")
-    events: List[str] = Field(default=["telemetry_update"], description="List of events to subscribe to")
-    secret: Optional[str] = Field(None, description="Optional secret for webhook signature")
-    device_id: Optional[str] = Field(None, description="Optional device ID to filter events")
+        return device
 
 
 # Notification storage for SSE
@@ -348,38 +291,6 @@ async def compute_next_virtual_pin(dashboard_id: ObjectId) -> str:
     return f"v{index}"
 
 
-def get_ist_now():
-    """Get current time in Asia/Kolkata timezone."""
-    if ZoneInfo_available:
-        return datetime.now(IST)
-    else:
-        return pytz.UTC.localize(datetime.utcnow()).astimezone(IST)
-
-
-def utc_to_ist(utc_dt: datetime) -> datetime:
-    """Convert UTC datetime to IST."""
-    if ZoneInfo_available:
-        if utc_dt.tzinfo is None:
-            utc_dt = datetime.fromtimestamp(utc_dt.timestamp(), tz=ZoneInfo("UTC"))
-        return utc_dt.astimezone(IST)
-    else:
-        if utc_dt.tzinfo is None:
-            utc_dt = pytz.UTC.localize(utc_dt)
-        return utc_dt.astimezone(IST)
-
-
-def ist_to_utc(ist_dt: datetime) -> datetime:
-    """Convert IST datetime to UTC."""
-    if ZoneInfo_available:
-        if ist_dt.tzinfo is None:
-            ist_dt = datetime.fromtimestamp(ist_dt.timestamp(), tz=IST)
-        return ist_dt.astimezone(ZoneInfo("UTC"))
-    else:
-        if ist_dt.tzinfo is None:
-            ist_dt = IST.localize(ist_dt)
-        return ist_dt.astimezone(pytz.UTC)
-
-
 async def apply_led_state(device_id: ObjectId, state: bool, virtual_pin: Optional[str] = None) -> None:
     """Update LED state for a device, persist telemetry, and broadcast to clients.
     
@@ -451,16 +362,15 @@ async def apply_led_state(device_id: ObjectId, state: bool, virtual_pin: Optiona
 
 async def ensure_led_widget_access(widget_oid: ObjectId, user_id: ObjectId):
     """Validate widget ownership and LED requirements."""
+    # 1. Verify Widget Exists
     widget = await db.widgets.find_one({"_id": widget_oid})
     if not widget:
         raise HTTPException(status_code=404, detail="Widget not found")
 
-    dashboard = await db.dashboards.find_one(
-        {"_id": widget["dashboard_id"], "user_id": user_id}
-    )
-    if not dashboard:
-        raise HTTPException(status_code=403, detail="Access denied")
-
+    # 2. Verify Dashboard Ownership (Rule: auth.uid == dashboard.user_id)
+    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), user_id, "Dashboard")
+    
+    # 3. Verify Widget Type
     if widget.get("type") != "led":
         raise HTTPException(status_code=400, detail="Widget is not an LED widget")
 
@@ -489,17 +399,12 @@ async def patch_widget(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid widget ID")
 
     user_id = safe_oid(current_user["id"])
-    if user_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid user ID")
-
     widget = await db.widgets.find_one({"_id": widget_oid})
     if not widget:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Widget not found")
 
-    # Verify the widget belongs to one of the user's dashboards
-    dashboard = await db.dashboards.find_one({"_id": widget["dashboard_id"], "user_id": user_id})
-    if not dashboard:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    # Rule: Write access requires Dashboard ownership
+    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), user_id, "Dashboard")
 
     # Allowed fields for partial update
     allowed = {"label", "config", "value"}
@@ -648,8 +553,7 @@ async def set_led_state(
 @router.get("/devices")
 async def get_devices(current_user: dict = Depends(get_current_user)):
     user_id = safe_oid(current_user["id"])
-    if user_id is None:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
+    # Rule: .read (List only own devices)
     devices = []
     async for d in db.devices.find({"user_id": user_id}):
         devices.append(doc_to_dict(d))
@@ -659,8 +563,7 @@ async def get_devices(current_user: dict = Depends(get_current_user)):
 @router.post("/devices")
 async def add_device(device: DeviceCreate, current_user: dict = Depends(get_current_user)):
     user_id = safe_oid(current_user["id"])
-    if user_id is None:
-        raise HTTPException(status_code=400, detail="Invalid user ID")
+    # Rule: .write (Create device for self)
     token = secrets.token_hex(16)
     now = datetime.utcnow()
 
@@ -690,13 +593,10 @@ async def add_device(device: DeviceCreate, current_user: dict = Depends(get_curr
 
 @router.delete("/devices/{device_id}")
 async def delete_device(device_id: str, current_user: dict = Depends(get_current_user)):
-    device_oid = safe_oid(device_id)
-    if device_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid device ID")
     user_id = safe_oid(current_user["id"])
-    device = await db.devices.find_one({"_id": device_oid, "user_id": user_id})
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    # Rule: .write (Delete own device)
+    device = await SecurityRules.verify_ownership(db.devices, device_id, user_id, "Device")
+    device_oid = device["_id"]
 
     await db.telemetry.delete_many({"device_id": device_oid})
     await db.devices.delete_one({"_id": device_oid})
@@ -722,19 +622,62 @@ async def delete_device(device_id: str, current_user: dict = Depends(get_current
     return {"message": "Device deleted"}
 
 
+@router.patch("/devices/bulk/status")
+async def bulk_update_device_status(
+    payload: DeviceBulkStatusUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Bulk update the status of multiple devices.
+    """
+    user_id = safe_oid(current_user["id"])
+    
+    # Filter valid ObjectIds
+    device_oids = [safe_oid(did) for did in payload.device_ids if safe_oid(did)]
+    
+    if not device_oids:
+        raise HTTPException(status_code=400, detail="No valid device IDs provided")
+
+    now = datetime.utcnow()
+
+    # Update only devices belonging to this user
+    result = await db.devices.update_many(
+        {"_id": {"$in": device_oids}, "user_id": user_id},
+        {"$set": {"status": payload.status, "last_active": now}}
+    )
+
+    # Broadcast updates to the user via WebSocket
+    # We iterate to send individual updates to maintain compatibility with existing frontend listeners
+    for oid in device_oids:
+        await manager.broadcast(
+            str(user_id),
+            {
+                "type": "status_update",
+                "device_id": str(oid),
+                "status": payload.status,
+                "timestamp": now.isoformat(),
+            },
+        )
+        
+        # Broadcast to global SSE event manager
+        asyncio.create_task(event_manager.broadcast({
+            "type": "status_update",
+            "device_id": str(oid),
+            "status": payload.status,
+            "timestamp": now.isoformat()
+        }))
+
+    return {"message": "Devices updated", "modified_count": result.modified_count}
+
+
 # ============================================================
 # 📡 TELEMETRY ROUTES
 # ============================================================
 @router.post("/telemetry")
 async def push_telemetry(data: TelemetryData):
     token = data.device_token
-    if not token:
-        raise HTTPException(status_code=400, detail="Missing device_token")
-
-    device = await db.devices.find_one({"device_token": token})
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
+    # Rule: .write (Allow if token matches)
+    device = await SecurityRules.verify_device_token(token)
     device_id = device["_id"]
     user_id = str(device["user_id"])
     now = datetime.utcnow()
@@ -850,10 +793,9 @@ async def push_telemetry(data: TelemetryData):
 
 @router.get("/telemetry/latest")
 async def get_latest_telemetry_by_token(device_token: str):
-    device = await db.devices.find_one({"device_token": device_token})
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
+    # Rule: .read (Allow if token matches)
+    device = await SecurityRules.verify_device_token(device_token)
+    
     telemetry = await db.telemetry.find_one({"device_id": device["_id"], "key": "telemetry_json"})
     if not telemetry:
         return {"device_id": str(device["_id"]), "data": {}, "timestamp": None}
@@ -876,18 +818,12 @@ async def get_telemetry_history(
     current_user: dict = Depends(get_current_user),
 ):
     """
-    Fetch historical telemetry data for a specific key, used for charts.
-    This is a simplified implementation. For production, consider time-series databases.
+    Fetch historical telemetry data.
     """
-    device_oid = safe_oid(device_id)
     user_id = safe_oid(current_user["id"])
-    if not device_oid or not user_id:
-        raise HTTPException(status_code=400, detail="Invalid ID")
-
-    # Verify user owns the device
-    device = await db.devices.find_one({"_id": device_oid, "user_id": user_id})
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found or access denied")
+    # Rule: .read (Owner only)
+    device = await SecurityRules.verify_ownership(db.devices, device_id, user_id, "Device")
+    device_oid = device["_id"]
 
     # For this example, we'll query the main telemetry JSON record.
     # A more robust solution would involve a separate collection for historical data.
@@ -947,15 +883,11 @@ async def list_dashboards(current_user: dict = Depends(get_current_user)):
 
 @router.delete("/dashboards/{dashboard_id}")
 async def delete_dashboard(dashboard_id: str, current_user: dict = Depends(get_current_user)):
-    dashboard_oid = safe_oid(dashboard_id)
     user_oid = safe_oid(current_user["id"])
-    if dashboard_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid dashboard ID")
-
-    dashboard = await db.dashboards.find_one({"_id": dashboard_oid, "user_id": user_oid})
-    if not dashboard:
-        raise HTTPException(status_code=404, detail="Dashboard not found")
-
+    # Rule: .write (Owner only)
+    dashboard = await SecurityRules.verify_ownership(db.dashboards, dashboard_id, user_oid, "Dashboard")
+    dashboard_oid = dashboard["_id"]
+    
     await db.widgets.delete_many({"dashboard_id": dashboard_oid})
     await db.dashboards.delete_one({"_id": dashboard_oid})
     return {"message": "Dashboard deleted"}
@@ -968,14 +900,10 @@ async def update_dashboard_layout(
     current_user: dict = Depends(get_current_user),
 ):
     """Update the order and size of widgets in a dashboard."""
-    dashboard_oid = safe_oid(dashboard_id)
     user_oid = safe_oid(current_user["id"])
-    if dashboard_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid dashboard ID")
-
-    dashboard = await db.dashboards.find_one({"_id": dashboard_oid, "user_id": user_oid})
-    if not dashboard:
-        raise HTTPException(status_code=404, detail="Dashboard not found or access denied")
+    # Rule: .write (Owner only)
+    dashboard = await SecurityRules.verify_ownership(db.dashboards, dashboard_id, user_oid, "Dashboard")
+    dashboard_oid = dashboard["_id"]
 
     try:
         # Use a bulk write for efficiency
@@ -1012,13 +940,9 @@ async def update_dashboard_layout(
 @router.post("/widgets")
 async def create_widget(widget: WidgetCreate, current_user: dict = Depends(get_current_user)):
     user_id = safe_oid(current_user["id"])
-    dashboard_id = safe_oid(widget.dashboard_id)
-    if user_id is None or dashboard_id is None:
-        raise HTTPException(status_code=400, detail="Invalid user/dashboard ID")
-
-    dashboard = await db.dashboards.find_one({"_id": dashboard_id, "user_id": user_id})
-    if not dashboard:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Rule: .write (Owner of dashboard only)
+    dashboard = await SecurityRules.verify_ownership(db.dashboards, widget.dashboard_id, user_id, "Dashboard")
+    dashboard_id = dashboard["_id"]
 
     config = dict(widget.config or {})
 
@@ -1078,12 +1002,7 @@ async def get_widgets(dashboard_id: str):
                 execute_at_utc = next_schedule_doc["execute_at"]
 
                 if isinstance(execute_at_utc, datetime):
-                    if execute_at_utc.tzinfo is None:
-                        if ZoneInfo_available:
-                            execute_at_utc = datetime.fromtimestamp(execute_at_utc.timestamp(), tz=ZoneInfo("UTC"))
-                        else:
-                            execute_at_utc = pytz.UTC.localize(execute_at_utc)
-
+                    # utc_to_ist handles naive datetimes by assuming they are UTC
                     execute_at_ist = utc_to_ist(execute_at_utc)
                     widget["next_schedule"] = execute_at_ist.isoformat()
                 else:
@@ -1114,9 +1033,8 @@ async def delete_widget(widget_id: str, current_user: dict = Depends(get_current
     if not widget:
         raise HTTPException(status_code=404, detail="Widget not found")
 
-    dashboard = await db.dashboards.find_one({"_id": widget["dashboard_id"], "user_id": user_id})
-    if not dashboard:
-        raise HTTPException(status_code=403, detail="Access denied")
+    # Rule: .write (Owner of dashboard only)
+    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), user_id, "Dashboard")
 
     dashboard_id = str(widget["dashboard_id"])
     await db.widgets.delete_one({"_id": widget_oid})
@@ -1245,11 +1163,6 @@ async def list_led_schedules(
                     utc_dt = datetime.fromisoformat(sched_dict["execute_at"])
             else:
                 utc_dt = sched_dict["execute_at"]
-            if utc_dt.tzinfo is None:
-                if ZoneInfo_available:
-                    utc_dt = datetime.fromtimestamp(utc_dt.timestamp(), tz=ZoneInfo("UTC"))
-                else:
-                    utc_dt = pytz.UTC.localize(utc_dt)
             ist_dt = utc_to_ist(utc_dt)
             sched_dict["execute_at"] = ist_dt.isoformat()
             sched_dict["execute_at_ist"] = ist_dt.isoformat()
@@ -1642,17 +1555,29 @@ async def notification_stream(request: Request, current_user: dict = Depends(get
 # ============================================================
 async def auto_offline_checker():
     """Automatically set devices offline after timeout"""
+    logger.info("Starting auto-offline checker background task")
     while True:
         try:
             now = datetime.utcnow()
+            # Find devices that are marked online
             async for device in db.devices.find({"status": "online"}):
                 last_active = device.get("last_active")
                 if last_active and (now - last_active).total_seconds() > OFFLINE_TIMEOUT:
+                    # 1. Update DB
                     await db.devices.update_one(
                         {"_id": device["_id"]},
                         {"$set": {"status": "offline"}},
                     )
-                    # Broadcast status update via WebSocket
+
+                    # 2. Broadcast to global SSE event manager (Global Stream)
+                    asyncio.create_task(event_manager.broadcast({
+                        "type": "status_update",
+                        "device_id": str(device["_id"]),
+                        "status": "offline",
+                        "timestamp": now.isoformat()
+                    }))
+
+                    # 3. Broadcast status update via WebSocket (User Stream)
                     await manager.broadcast(
                         str(device["user_id"]),
                         {
@@ -1662,7 +1587,8 @@ async def auto_offline_checker():
                             "timestamp": now.isoformat(),
                         },
                     )
-                    # Create notification for device going offline
+                    
+                    # 4. Create notification for device going offline
                     await create_notification(
                         device["user_id"],
                         "Device Offline",
@@ -1671,11 +1597,14 @@ async def auto_offline_checker():
                         f"Device last seen: {last_active.strftime('%I:%M %p') if last_active else 'Unknown'}\nTimeout: {OFFLINE_TIMEOUT} seconds",
                         device["_id"],
                     )
+                    
+                    logger.debug(f"Device {device['_id']} set to offline")
+
         except Exception as exc:
             logger.error(f"Error in auto_offline_checker: {exc}", exc_info=True)
-        finally:
-            # Sleep for 60 seconds before checking again
-            await asyncio.sleep(60)
+        
+        # Sleep for the timeout duration before checking again
+        await asyncio.sleep(OFFLINE_TIMEOUT)
 
 
 # ============================================================
@@ -1699,12 +1628,8 @@ async def create_webhook(
     device_oid = None
     if webhook.device_id:
         device_oid = safe_oid(webhook.device_id)
-        if device_oid is None:
-            raise HTTPException(status_code=400, detail="Invalid device ID")
-        # Verify device belongs to user
-        device = await db.devices.find_one({"_id": device_oid, "user_id": user_id})
-        if not device:
-            raise HTTPException(status_code=404, detail="Device not found")
+        # Rule: .read (Verify device ownership)
+        await SecurityRules.verify_ownership(db.devices, webhook.device_id, user_id, "Device")
     
     # Generate secret if not provided
     secret = webhook.secret or secrets.token_urlsafe(32)
@@ -1751,14 +1676,8 @@ async def get_webhook(
 ):
     """Get a specific webhook by ID."""
     user_id = safe_oid(current_user["id"])
-    webhook_oid = safe_oid(webhook_id)
-    
-    if user_id is None or webhook_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid ID")
-    
-    webhook = await db.webhooks.find_one({"_id": webhook_oid, "user_id": user_id})
-    if not webhook:
-        raise HTTPException(status_code=404, detail="Webhook not found")
+    # Rule: .read (Owner only)
+    webhook = await SecurityRules.verify_ownership(db.webhooks, webhook_id, user_id, "Webhook")
     
     webhook_dict = doc_to_dict(webhook)
     # Don't expose full secret
@@ -1775,11 +1694,10 @@ async def delete_webhook(
 ):
     """Delete a webhook."""
     user_id = safe_oid(current_user["id"])
-    webhook_oid = safe_oid(webhook_id)
-    
-    if user_id is None or webhook_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid ID")
-    
+    # Rule: .write (Owner only)
+    webhook = await SecurityRules.verify_ownership(db.webhooks, webhook_id, user_id, "Webhook")
+    webhook_oid = webhook["_id"]
+
     result = await db.webhooks.delete_one({"_id": webhook_oid, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -1795,14 +1713,9 @@ async def update_webhook(
 ):
     """Update a webhook (activate/deactivate, change URL, etc.)."""
     user_id = safe_oid(current_user["id"])
-    webhook_oid = safe_oid(webhook_id)
-    
-    if user_id is None or webhook_oid is None:
-        raise HTTPException(status_code=400, detail="Invalid ID")
-    
-    webhook = await db.webhooks.find_one({"_id": webhook_oid, "user_id": user_id})
-    if not webhook:
-        raise HTTPException(status_code=404, detail="Webhook not found")
+    # Rule: .write (Owner only)
+    webhook = await SecurityRules.verify_ownership(db.webhooks, webhook_id, user_id, "Webhook")
+    webhook_oid = webhook["_id"]
     
     # Allowed fields for update
     allowed = {"url", "events", "active", "secret"}

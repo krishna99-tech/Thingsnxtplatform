@@ -1,0 +1,26 @@
+{
+  "devices": {
+    "$device_id": {
+      ".read": "auth.uid == data.user_id",
+      ".write": "auth.uid == data.user_id"
+    }
+  },
+  "dashboards": {
+    "$dashboard_id": {
+      ".read": "auth.uid == data.user_id",
+      ".write": "auth.uid == data.user_id"
+    }
+  },
+  "widgets": {
+    "$widget_id": {
+      ".read": "auth.uid == root.dashboards[data.dashboard_id].user_id",
+      ".write": "auth.uid == root.dashboards[data.dashboard_id].user_id"
+    }
+  },
+  "webhooks": {
+    "$webhook_id": {
+      ".read": "auth.uid == data.user_id",
+      ".write": "auth.uid == data.user_id"
+    }
+  }
+}

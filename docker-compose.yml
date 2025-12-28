@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend Service
+  api:
+    build: .
+    container_name: thingsnxt-backend
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Connect to host machine's MongoDB using host.docker.internal
+      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASSWORD}@host.docker.internal:27017/?authSource=admin
+      - SECRET_KEY=${SECRET_KEY}
+      - ALGORITHM=${ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - ENVIRONMENT=${ENVIRONMENT}
+    networks:
+      - app-network
+networks:
+  app-network:
+    driver: bridge

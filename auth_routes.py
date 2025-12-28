@@ -110,12 +110,15 @@ async def token(form_data: OAuth2PasswordRequestForm = Depends()):
     identifier = form_data.username
     user = await db.users.find_one({"$or": [{"username": identifier}, {"email": identifier}]})
     if not user:
+        logger.warning(f"Login failed: User '{identifier}' not found")
         raise HTTPException(status_code=400, detail="Incorrect username or password")
 
     if not verify_password(form_data.password, user["hashed_password"]):
+        logger.warning(f"Login failed: Invalid password for user '{identifier}'")
         raise HTTPException(status_code=400, detail="Incorrect username or password")
 
     if not user.get("is_active", True):
+        logger.warning(f"Login failed: User '{identifier}' is inactive")
         raise HTTPException(status_code=400, detail="Inactive user")
 
     sub_value = user["username"]
@@ -146,12 +149,15 @@ async def login(user: UserLogin):
         {"$or": [{"email": user.email}, {"username": user.email}]}
     )
     if not user_db:
+        logger.warning(f"Login failed: User '{user.email}' not found")
         raise HTTPException(status_code=400, detail="Invalid email or password")
 
     if not verify_password(user.password, user_db["hashed_password"]):
+        logger.warning(f"Login failed: Invalid password for user '{user.email}'")
         raise HTTPException(status_code=400, detail="Invalid email or password")
 
     if not user_db.get("is_active", True):
+        logger.warning(f"Login failed: User '{user.email}' is inactive")
         raise HTTPException(status_code=400, detail="Inactive user")
 
     access = create_access_token({"sub": user_db["email"] or user_db["username"]})
