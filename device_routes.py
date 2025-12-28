@@ -92,10 +92,19 @@ class SecurityRules:
         device = await db.devices.find_one({"device_token": token})
         if not device:
             raise HTTPException(status_code=404, detail="Device not found")
-            
-        # For telemetry, we might check a specific rule or assume token possession is enough
-        # If we want to use the engine:
-        # await rules_engine.validate_rule("telemetry", ".write", None, device, {"device_token": token})
+        
+        # Validate telemetry write rule using rules engine
+        # Telemetry can be written by device owner OR by device token
+        device_dict = doc_to_dict(device)
+        is_allowed = await rules_engine.validate_rule(
+            "telemetry", 
+            ".write", 
+            device_dict.get("user_id"), 
+            device_dict,
+            {"device_token": token}
+        )
+        if not is_allowed:
+            raise HTTPException(status_code=403, detail="Access denied by security rules")
         
         return device
 

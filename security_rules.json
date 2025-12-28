@@ -1,4 +1,10 @@
 {
+  "users": {
+    "$user_id": {
+      ".read": "auth.uid == data.id or auth.uid == data._id",
+      ".write": "auth.uid == data.id or auth.uid == data._id"
+    }
+  },
   "devices": {
     "$device_id": {
       ".read": "auth.uid == data.user_id",
@@ -17,10 +23,40 @@
       ".write": "auth.uid == root.dashboards[data.dashboard_id].user_id"
     }
   },
+  "telemetry": {
+    "$telemetry_id": {
+      ".read": "auth.uid == root.devices[data.device_id].user_id",
+      ".write": "auth.uid == root.devices[data.device_id].user_id or data.device_token == root.devices[data.device_id].device_token"
+    }
+  },
+  "notifications": {
+    "$notification_id": {
+      ".read": "auth.uid == data.user_id",
+      ".write": "auth.uid == data.user_id"
+    }
+  },
   "webhooks": {
     "$webhook_id": {
       ".read": "auth.uid == data.user_id",
       ".write": "auth.uid == data.user_id"
+    }
+  },
+  "led_schedules": {
+    "$schedule_id": {
+      ".read": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id",
+      ".write": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id"
+    }
+  },
+  "refresh_tokens": {
+    "$token_id": {
+      ".read": "auth.uid == data.user_id",
+      ".write": "auth.uid == data.user_id"
+    }
+  },
+  "reset_tokens": {
+    "$token_id": {
+      ".read": "True",
+      ".write": "True"
     }
   }
 }

@@ -100,43 +100,119 @@ class RulesEngine:
             context.update(extra_context)
 
         # 🔍 Handle 'root' lookups (e.g., root.dashboards[data.dashboard_id])
-        # Regex to find patterns like: root.dashboards[data.dashboard_id]
-        # We support a specific pattern: root.collection_name[data.field_name]
-        root_matches = re.findall(r"root\.(\w+)\[data\.(\w+)\]", rule_expr)
+        # Regex to find patterns like: root.dashboards[data.dashboard_id] or nested root.widgets[data.widget_id].dashboard_id
+        # We support patterns: root.collection_name[data.field_name] and nested access
+        root_matches = re.findall(r"root\.(\w+)\[([^\]]+)\]", rule_expr)
         
-        for col_name, field_name in root_matches:
-            ref_id = data_dict.get(field_name)
-            if ref_id:
-                # Fetch the referenced document
-                # Note: This assumes db collection names match rule collection names
-                collection = getattr(db, col_name, None)
-                if collection:
-                    ref_doc = await collection.find_one({"_id": ObjectId(ref_id)})
-                    if ref_doc:
-                        # Add to context under root.collection_name[ref_id]
-                        # But since we can't easily map dynamic dict access in eval without a custom class,
-                        # we will simplify the rule evaluation by replacing the string expression 
-                        # or by populating a specific structure.
-                        
-                        # Strategy: Create a nested dict structure for the specific lookup
-                        if col_name not in context["root"]:
-                            context["root"][col_name] = {}
-                        
-                        context["root"][col_name][ref_id] = self.MockObject(doc_to_dict(ref_doc))
+        # Create a custom RootAccess class for dynamic lookups
+        class RootAccess:
+            def __init__(self, context_dict):
+                self._data = context_dict
+                
+            def __getattr__(self, collection_name):
+                collection_data = self._data.get(collection_name, {})
+                return CollectionAccess(collection_name, collection_data, data_dict)
+        
+        class CollectionAccess:
+            def __init__(self, collection_name, collection_data, data_dict_ref):
+                self._collection_name = collection_name
+                self._collection_data = collection_data
+                self._data_dict = data_dict_ref
+                
+            def __getitem__(self, key):
+                # Handle nested access like root.widgets[data.widget_id].dashboard_id
+                if isinstance(key, str) and key.startswith("data."):
+                    # Extract field name from data.field_name
+                    field_name = key.replace("data.", "")
+                    ref_id = self._data_dict.get(field_name)
+                    if ref_id:
+                        return self._get_document(ref_id)
+                elif isinstance(key, str) and key.startswith("root."):
+                    # Handle nested root access: root.widgets[data.widget_id].dashboard_id
+                    # This will be handled by the outer RootAccess
+                    return None
+                elif isinstance(key, str):
+                    # Direct ID access
+                    return self._get_document(key)
+                return None
+                
+            def _get_document(self, doc_id):
+                if doc_id in self._collection_data:
+                    return self._collection_data[doc_id]
+                return None
+        
+        # Fetch all referenced documents for root lookups
+        fetched_collections = set()
+        root_data = {}
+        
+        for col_name, key_expr in root_matches:
+            if col_name not in fetched_collections:
+                # Extract field name if it's data.field_name
+                if key_expr.startswith("data."):
+                    field_name = key_expr.replace("data.", "")
+                    ref_id = data_dict.get(field_name)
+                else:
+                    ref_id = key_expr
+                
+                if ref_id:
+                    collection = getattr(db, col_name, None)
+                    if collection:
+                        try:
+                            ref_doc = await collection.find_one({"_id": ObjectId(ref_id)})
+                            if ref_doc:
+                                if col_name not in root_data:
+                                    root_data[col_name] = {}
+                                root_data[col_name][ref_id] = self.MockObject(doc_to_dict(ref_doc))
+                        except Exception as e:
+                            logger.debug(f"Could not fetch {col_name}[{ref_id}]: {e}")
+                fetched_collections.add(col_name)
+        
+        # Handle nested root lookups (e.g., root.dashboards[root.widgets[data.widget_id].dashboard_id])
+        # This requires a second pass after initial documents are fetched
+        nested_matches = re.findall(r"root\.(\w+)\[root\.(\w+)\[([^\]]+)\]\.(\w+)\]", rule_expr)
+        for target_col, source_col, source_key, source_field in nested_matches:
+            # Get source document
+            source_ref_id = None
+            if source_key.startswith("data."):
+                source_field_name = source_key.replace("data.", "")
+                source_ref_id = data_dict.get(source_field_name)
+            else:
+                source_ref_id = source_key
+            
+            if source_ref_id and source_col in root_data:
+                source_doc = root_data[source_col].get(source_ref_id)
+                if source_doc:
+                    nested_ref_id = getattr(source_doc, source_field, None) or source_doc.get(source_field)
+                    if nested_ref_id:
+                        collection = getattr(db, target_col, None)
+                        if collection:
+                            try:
+                                ref_doc = await collection.find_one({"_id": ObjectId(nested_ref_id)})
+                                if ref_doc:
+                                    if target_col not in root_data:
+                                        root_data[target_col] = {}
+                                    root_data[target_col][nested_ref_id] = self.MockObject(doc_to_dict(ref_doc))
+                            except Exception as e:
+                                logger.debug(f"Could not fetch nested {target_col}[{nested_ref_id}]: {e}")
+        
+        # Replace context["root"] with RootAccess for dynamic lookups
+        context["root"] = RootAccess(root_data)
 
         try:
             # Evaluate
             # We use a restricted scope (empty __builtins__) for safety
-            # Replace JS-like syntax if present (though we use Python syntax in JSON)
+            # Support both == (Python) and === (JS-like) for compatibility
+            rule_expr_python = rule_expr.replace("===", "==")
             
             # Cache compiled code objects to avoid re-parsing
-            if rule_expr not in self.compiled_rules:
-                self.compiled_rules[rule_expr] = compile(rule_expr, '<string>', 'eval')
+            cache_key = rule_expr_python
+            if cache_key not in self.compiled_rules:
+                self.compiled_rules[cache_key] = compile(rule_expr_python, '<string>', 'eval')
             
-            result = eval(self.compiled_rules[rule_expr], {"__builtins__": {}}, context)
+            result = eval(self.compiled_rules[cache_key], {"__builtins__": {}}, context)
             return bool(result)
         except Exception as e:
-            logger.error(f"❌ Rule evaluation error: {e} | Rule: {rule_expr}")
+            logger.error(f"❌ Rule evaluation error: {e} | Rule: {rule_expr} | Context keys: {list(context.keys())}")
             return False
 
 rules_engine = RulesEngine()

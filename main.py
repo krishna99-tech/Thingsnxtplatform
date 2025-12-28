@@ -4,8 +4,9 @@ from fastapi.responses import JSONResponse
 import asyncio
 import logging
 import os
-from db import init_db
+from contextlib import asynccontextmanager
 
+from db import init_db
 # Import API Gateway and Background Tasks
 from api_gateway import api_gateway
 from device_routes import led_schedule_worker, auto_offline_checker
@@ -19,34 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="ThingsNXT IoT Platform API",
-    version="1.0.0",
-    description="Production-ready FastAPI backend for IoT device management, telemetry, dashboards, and real-time updates.",
-    docs_url="/docs" if os.getenv("ENVIRONMENT", "development") == "development" else None,
-    redoc_url="/redoc" if os.getenv("ENVIRONMENT", "development") == "development" else None,
-)
-
-# CORS Configuration - Update for production
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # ============================================================
-# 🚀 Integrate API Gateway
+# 🔄 Lifespan Context Manager (FastAPI 0.93+)
 # ============================================================
-# Note: Frontend expects routes without /api prefix based on config.js
-# The gateway aggregates Auth, Device, WebSocket, and Event routes.
-app.include_router(api_gateway)
-
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan events."""
+    # Startup
     logger.info("🚀 Starting ThingsNXT IoT Platform Backend...")
     
     try:
@@ -65,15 +46,43 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Startup error: {e}", exc_info=True)
         raise
-
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on application shutdown."""
+    
+    yield
+    
+    # Shutdown
     logger.info("🛑 Shutting down ThingsNXT IoT Platform Backend...")
     # Any cleanup tasks can be added here
     logger.info("✅ Shutdown complete")
+
+
+# ============================================================
+# 🚀 FastAPI Application
+# ============================================================
+app = FastAPI(
+    title="ThingsNXT IoT Platform API",
+    version="1.0.0",
+    description="Production-ready FastAPI backend for IoT device management, telemetry, dashboards, and real-time updates.",
+    docs_url="/docs" if os.getenv("ENVIRONMENT", "development") == "development" else None,
+    redoc_url="/redoc" if os.getenv("ENVIRONMENT", "development") == "development" else None,
+    lifespan=lifespan,  # Use lifespan context manager instead of deprecated on_event
+)
+
+# CORS Configuration - Update for production
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ============================================================
+# 🚀 Integrate API Gateway
+# ============================================================
+# Note: Frontend expects routes without /api prefix based on config.js
+# The gateway aggregates Auth, Device, WebSocket, and Event routes.
+app.include_router(api_gateway)
 
 
 if __name__ == "__main__":
