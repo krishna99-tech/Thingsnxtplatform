@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 # ⚙️ Constants
 # ============================================================
 OFFLINE_TIMEOUT = int(os.getenv("OFFLINE_TIMEOUT", "20"))
+NOTIFICATION_COOLDOWN = int(os.getenv("NOTIFICATION_COOLDOWN", "60"))
 SECRET_KEY = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
@@ -95,17 +96,41 @@ def create_refresh_token(data: dict):
 # ============================================================
 # ✉️ Email Utility
 # ============================================================
-def send_reset_email(email: str, token: str) -> bool:
-    """Sends a password reset email using Jinja2 templates."""
+def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    """Generic function to send emails using SMTP."""
     try:
         if not EMAIL_USER or not EMAIL_PASSWORD:
             logger.warning(
-                "Email credentials missing; skipping password reset email for %s. "
+                "Email credentials missing; skipping email to %s. "
                 "Set EMAIL_USER and EMAIL_PASSWORD to enable email delivery.",
-                email,
+                to_email,
             )
             return False
 
+        message = MIMEMultipart("alternative")
+        message["Subject"] = subject
+        message["From"] = EMAIL_FROM or EMAIL_USER
+        message["To"] = to_email
+
+        message.attach(MIMEText(text_body, "plain"))
+        message.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(EMAIL_USER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_FROM or EMAIL_USER, to_email, message.as_string())
+
+        logger.info(f"Email sent successfully to {to_email}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send email to {to_email}: {e}", exc_info=True)
+        return False
+
+def send_reset_email(email: str, token: str) -> bool:
+    """Sends a password reset email using Jinja2 templates."""
+    try:
         # 1. Prepare template context from environment variables
         app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
         frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
@@ -120,34 +145,19 @@ def send_reset_email(email: str, token: str) -> bool:
             "copyright_text": f"© {datetime.now().year} {os.getenv('COMPANY_NAME', 'ThingsNXT')}",
         }
 
-        # 2. Setup email message
-        message = MIMEMultipart("alternative")
-        message["Subject"] = f"{app_name} — Password Reset Request"
-        message["From"] = EMAIL_FROM or EMAIL_USER
-        message["To"] = email
+        subject = f"{app_name} — Password Reset Request"
 
-        # 3. Render and attach both HTML and plain text parts
+        # 2. Render templates and send
         try:
             html_template = jinja_env.get_template("email_reset.html")
             text_template = jinja_env.get_template("email_reset.txt")
             html_body = html_template.render(context)
             text_body = text_template.render(context)
             
-            message.attach(MIMEText(text_body, "plain"))
-            message.attach(MIMEText(html_body, "html"))
+            return send_email(email, subject, html_body, text_body)
         except Exception as e:
             logger.error(f"Failed to render email template: {e}", exc_info=True)
             return False
-
-        # 4. Send the email
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_FROM or EMAIL_USER, email, message.as_string())
-
-        logger.info(f"Password reset email sent successfully to {email}")
-        return True
 
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)

@@ -14,13 +14,15 @@ from typing import Optional, Dict, Any, List
 from db import db
 from utils import (
     OFFLINE_TIMEOUT, 
+    NOTIFICATION_COOLDOWN,
     doc_to_dict, 
     get_ist_now, 
     utc_to_ist, 
     ist_to_utc, 
     IST, 
     ZoneInfo_available,
-    ZoneInfo
+    ZoneInfo,
+    send_email
 )
 from websocket_manager import manager
 from event_manager import event_manager # 👈 Import the global event manager
@@ -45,6 +47,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Devices", "Telemetry", "Dashboards", "Widgets"])
 
+# ============================================================
+# 🐞 DEBUG ENDPOINT: List all devices as seen by backend (for troubleshooting)
+# ============================================================
+@router.get("/__debug/devices", tags=["__debug"])
+async def debug_list_devices():
+    """
+    Returns all devices in DB, with their _id and device_token (for backend debugging).
+    """
+    devices = []
+    async for d in db.devices.find({}):
+        devices.append({
+            "_id": str(d["_id"]),
+            "device_token": d.get("device_token", None),
+            "user_id": str(d.get("user_id", "")),
+            "name": d.get("name", ""),
+        })
+    return {"count": len(devices), "devices": devices}
+
+
 
 # -------------------------------
 # 🔹 Helper: Safe ObjectId convert
@@ -54,7 +75,7 @@ def safe_oid(value: str) -> Optional[ObjectId]:
 
 
 # ============================================================
-# 🔒 FIREBASE-LIKE SECURITY RULES ENGINE
+# 🔒 SECURITY RULES ENGINE
 # ============================================================
 # This class now delegates logic to rules_engine.py which loads
 # rules from security_rules.json.
@@ -135,6 +156,17 @@ async def create_notification(
     widget_id: Optional[ObjectId] = None,
 ) -> None:
     """Create and store a notification, then push to SSE streams."""
+    # Check user notification settings
+    user = await db.users.find_one({"_id": user_id}, {"notification_settings": 1, "email": 1})
+    if not user:
+        return
+
+    settings = user.get("notification_settings", {})
+
+    # If notifications are globally disabled, stop here
+    if settings.get("enabled") is False:
+        return
+
     now = datetime.utcnow()
     
     notification_doc = {
@@ -165,22 +197,46 @@ async def create_notification(
         "widget_id": str(widget_id) if widget_id else None,
     }
     
-    # Push to SSE stream for this user
-    user_id_str = str(user_id)
-    if user_id_str in notification_streams:
-        try:
-            await notification_streams[user_id_str].put(notification_payload)
-        except Exception as e:
-            print(f"Error pushing notification to SSE stream: {e}")
-    
-    # Also broadcast via WebSocket
-    await manager.broadcast(
-        user_id_str,
-        {
-            "type": "notification",
-            "notification": notification_payload,
-        },
-    )
+    # Only broadcast real-time updates if Push notifications are enabled
+    if settings.get("push", True) is not False:
+        # Push to SSE stream for this user
+        user_id_str = str(user_id)
+        if user_id_str in notification_streams:
+            try:
+                await notification_streams[user_id_str].put(notification_payload)
+            except Exception as e:
+                print(f"Error pushing notification to SSE stream: {e}")
+        
+        # Also broadcast via WebSocket
+        await manager.broadcast(
+            user_id_str,
+            {
+                "type": "notification",
+                "notification": notification_payload,
+            },
+        )
+
+    # Send Email Notification if enabled
+    if settings.get("email", True) is not False and user.get("email"):
+        email_subject = f"Notification: {title}"
+        email_html = f"""
+        <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
+            <h2 style="color: #333;">{title}</h2>
+            <p style="font-size: 16px; color: #555;">{message}</p>
+            {f'<p style="background: #f9f9f9; padding: 10px; border-left: 4px solid #007bff;">{details}</p>' if details else ''}
+            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+            <p style="font-size: 12px; color: #999;">
+                Time: {now.strftime("%Y-%m-%d %H:%M:%S UTC")}<br>
+                Device ID: {device_id or 'N/A'}
+            </p>
+        </div>
+        """
+        email_text = f"{title}\n\n{message}\n\n{details or ''}\n\nTime: {now.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        
+        # Send in background thread to avoid blocking the async event loop
+        asyncio.create_task(asyncio.to_thread(
+            send_email, user["email"], email_subject, email_html, email_text
+        ))
 
 
 # -------------------------------
@@ -691,6 +747,115 @@ async def bulk_update_device_status(
 # ============================================================
 # 📡 TELEMETRY ROUTES
 # ============================================================
+# ============================================================
+# 📡 V2 TELEMETRY ENDPOINTS (for ESP32 and future devices)
+# ============================================================
+@router.post("/devices/{device_id}/telemetry", tags=["Telemetry V2"])
+async def push_telemetry_v2(device_id: str, data: TelemetryData):
+    """
+    New V2 endpoint where device_id is in the path, esp32-friendly.
+    Accepts: TelemetryData with optional device_token for auth.
+    """
+    # Validate device existence
+    dev_oid = safe_oid(device_id)
+    if not dev_oid:
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    device = await db.devices.find_one({"_id": dev_oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    # Validate device_token if provided
+    if not data.device_token or device.get("device_token") != data.device_token:
+        raise HTTPException(status_code=403, detail="Invalid device_token for device")
+
+    # Validate telemetry write rule using rules engine
+    device_dict = doc_to_dict(device)
+    telemetry_context = {
+        "device_id": str(device["_id"]),
+        "device_token": data.device_token,
+        **device_dict
+    }
+    
+    is_allowed = await rules_engine.validate_rule(
+        "telemetry", 
+        ".write", 
+        device_dict.get("user_id"), 
+        telemetry_context,
+        {"device_token": data.device_token}
+    )
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="Access denied by security rules")
+
+    user_id = str(device.get("user_id", ""))
+    # Check if device was previously offline (for notification)
+    was_offline = device.get("status") != "online"
+    
+    # Check cooldown for notification
+    now = datetime.utcnow()
+    should_notify = False
+    if was_offline:
+        last_notif = device.get("last_status_notification")
+        if not last_notif or (now - last_notif).total_seconds() > NOTIFICATION_COOLDOWN:
+            should_notify = True
+
+    payload = data.data or {}
+
+    # Store telemetry (same logic as old /telemetry)
+    telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
+    if telemetry:
+        existing = telemetry.get("value", {})
+        existing.update(payload)
+        await db.telemetry.update_one(
+            {"_id": telemetry["_id"]},
+            {"$set": {"value": existing, "timestamp": now}},
+        )
+    else:
+        await db.telemetry.insert_one(
+            {"device_id": dev_oid, "key": "telemetry_json", "value": payload, "timestamp": now}
+        )
+    # Update device status
+    update_fields = {"status": "online", "last_active": now}
+    if should_notify:
+        update_fields["last_status_notification"] = now
+
+    await db.devices.update_one(
+        {"_id": dev_oid},
+        {"$set": update_fields},
+    )
+
+    # Broadcast status update via WebSocket (Ensure frontend knows device is online)
+    await manager.broadcast(user_id, {
+        "type": "status_update",
+        "device_id": device_id,
+        "status": "online",
+        "timestamp": now.isoformat(),
+    })
+
+    # Broadcast via websocket
+    await manager.broadcast(user_id, {
+        "type": "telemetry_update",
+        "device_id": device_id,
+        "timestamp": now.isoformat(),
+        "data": payload,
+    })
+
+    # Notify if device came back online
+    if should_notify:
+        await create_notification(
+            device["user_id"],
+            "Device Online",
+            f"{device.get('name', 'Device')} is now online",
+            "success",
+            f"Device reconnected at {now.strftime('%I:%M %p')}",
+            dev_oid,
+        )
+
+    # Fetch latest state to return to device (allows device to sync state)
+    updated_telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
+    current_data = updated_telemetry.get("value", {}) if updated_telemetry else payload
+
+    return {"message": "ok", "device_id": device_id, "data": current_data, "timestamp": now.isoformat()}
+
+# Legacy endpoint remains for backward compatibility
 @router.post("/telemetry")
 async def push_telemetry(data: TelemetryData):
     token = data.device_token
@@ -700,6 +865,15 @@ async def push_telemetry(data: TelemetryData):
     user_id = str(device["user_id"])
     now = datetime.utcnow()
     payload = data.data or {}
+
+    # Check device status before update for notification logic
+    device_before = await db.devices.find_one({"_id": device_id})
+    was_offline = device_before and device_before.get("status") != "online"
+    should_notify = False
+    if was_offline:
+        last_notif = device_before.get("last_status_notification")
+        if not last_notif or (now - last_notif).total_seconds() > NOTIFICATION_COOLDOWN:
+            should_notify = True
 
     # 1️⃣ Update telemetry_json record
     telemetry = await db.telemetry.find_one({"device_id": device_id, "key": "telemetry_json"})
@@ -716,12 +890,13 @@ async def push_telemetry(data: TelemetryData):
         )
 
     # 2️⃣ Update device online status (with improved logic)
-    device_before = await db.devices.find_one({"_id": device_id})
-    was_offline = device_before and device_before.get("status") != "online"
+    update_fields = {"status": "online", "last_active": now}
+    if should_notify:
+        update_fields["last_status_notification"] = now
     
     await db.devices.update_one(
         {"_id": device_id},
-        {"$set": {"status": "online", "last_active": now}},
+        {"$set": update_fields},
     )
     
     # Broadcast status update via WebSocket immediately
@@ -736,7 +911,7 @@ async def push_telemetry(data: TelemetryData):
     )
     
     # Notify if device came back online
-    if was_offline:
+    if should_notify:
         # Create notification for device coming online
         await create_notification(
             device["user_id"],
@@ -797,13 +972,17 @@ async def push_telemetry(data: TelemetryData):
     logger.debug(f"Telemetry updated for device {device_id}: {len(payload)} keys")
     
     # Extract LED state if present
-    led_state = payload.get("led") or payload.get("v0") or 0
+    # Fetch latest state for response
+    updated_telemetry = await db.telemetry.find_one({"device_id": device_id, "key": "telemetry_json"})
+    current_data = updated_telemetry.get("value", {}) if updated_telemetry else payload
+    
+    led_state = current_data.get("led") or current_data.get("v0") or 0
     
     return {
         "message": "ok",
         "device_id": str(device_id),
         "led": led_state,
-        "updated_data": payload, # This is for the device's response, not the broadcast
+        "updated_data": current_data, # Return latest DB state
         "timestamp": now.isoformat(),
     }
 
@@ -1581,10 +1760,18 @@ async def auto_offline_checker():
             async for device in db.devices.find({"status": "online"}):
                 last_active = device.get("last_active")
                 if last_active and (now - last_active).total_seconds() > OFFLINE_TIMEOUT:
+                    # Check cooldown
+                    last_notif = device.get("last_status_notification")
+                    should_notify = not last_notif or (now - last_notif).total_seconds() > NOTIFICATION_COOLDOWN
+
+                    update_fields = {"status": "offline"}
+                    if should_notify:
+                        update_fields["last_status_notification"] = now
+
                     # 1. Update DB
                     await db.devices.update_one(
                         {"_id": device["_id"]},
-                        {"$set": {"status": "offline"}},
+                        {"$set": update_fields},
                     )
 
                     # 2. Broadcast to global SSE event manager (Global Stream)
@@ -1607,14 +1794,15 @@ async def auto_offline_checker():
                     )
                     
                     # 4. Create notification for device going offline
-                    await create_notification(
-                        device["user_id"],
-                        "Device Offline",
-                        f"{device.get('name', 'Device')} is now offline",
-                        "warning",
-                        f"Device last seen: {last_active.strftime('%I:%M %p') if last_active else 'Unknown'}\nTimeout: {OFFLINE_TIMEOUT} seconds",
-                        device["_id"],
-                    )
+                    if should_notify:
+                        await create_notification(
+                            device["user_id"],
+                            "Device Offline",
+                            f"{device.get('name', 'Device')} is now offline",
+                            "warning",
+                            f"Device last seen: {last_active.strftime('%I:%M %p') if last_active else 'Unknown'}\nTimeout: {OFFLINE_TIMEOUT} seconds",
+                            device["_id"],
+                        )
                     
                     logger.debug(f"Device {device['_id']} set to offline")
 

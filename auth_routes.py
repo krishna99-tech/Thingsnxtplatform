@@ -235,13 +235,18 @@ async def update_me(
     user_data: dict,
     current_user: dict = Depends(get_current_user)
 ):
-    """Update the current user's profile (username, email, etc.)."""
+    """Update the current user's profile (username, email, full_name, etc.)."""
     user_id = ObjectId(current_user["id"])
     update_fields = {}
     if "username" in user_data and user_data["username"]:
         update_fields["username"] = user_data["username"]
     if "email" in user_data and user_data["email"]:
         update_fields["email"] = user_data["email"]
+    if "full_name" in user_data:
+        # Allow setting full_name to empty string or None
+        update_fields["full_name"] = user_data["full_name"] if user_data["full_name"] else None
+    if "notification_settings" in user_data:
+        update_fields["notification_settings"] = user_data["notification_settings"]
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No update fields provided")

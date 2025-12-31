@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, validator
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 # ===============================
@@ -83,3 +83,4 @@ class UserOut(BaseModel):
     username: Optional[str]
     full_name: Optional[str]
     is_active: bool
+    notification_settings: Optional[Dict[str, Any]] = None
