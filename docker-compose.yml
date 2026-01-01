@@ -15,10 +15,9 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       # MongoDB Connection - External MongoDB
-      # Option 1: Connect to MongoDB on host machine
-      - MONGO_URI=${MONGO_URI:-mongodb://${MONGO_USER:-admin}:${MONGO_PASSWORD:-changeme}@host.docker.internal:27017/${MONGO_DB_NAME:-iot_auth_db}?authSource=admin}
-      # Option 2: Connect to remote MongoDB (uncomment and set MONGO_URI in .env)
-      # - MONGO_URI=${MONGO_URI}
+      # Force connection to host machine using credentials from .env
+      # This ignores the '127.0.0.1' URI in .env which is for local dev only
+      - MONGO_URI=mongodb://${MONGO_USER:-admin}:${MONGO_PASSWORD:-changeme}@host.docker.internal:27017/${MONGO_DB_NAME:-iot_auth_db}?authSource=admin
       - MONGO_DB_NAME=${MONGO_DB_NAME:-iot_auth_db}
       # JWT Configuration
       - SECRET_KEY=${SECRET_KEY:-your-secret-key-change-in-production}
@@ -40,6 +39,7 @@ services:
       - APP_NAME=${APP_NAME:-ThingsNXT IoT Platform}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
       - COMPANY_NAME=${COMPANY_NAME:-ThingsNXT}
+      - REDIS_URL=redis://redis:6379
     networks:
       - app-network
     healthcheck:
@@ -48,11 +48,34 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       # Mount templates directory if needed
       - ./templates:/app/templates:ro
       # Optional: Mount logs directory
       - ./logs:/app/logs
+
+  # Redis Service for Rate Limiting & Caching
+  redis:
+    image: redis:alpine
+    container_name: thingsnxt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
 
 networks:
   app-network:

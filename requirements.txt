@@ -21,3 +21,4 @@ cryptography==41.0.4
 email-validator==2.0.0
 Pillow==10.4.0
 python-crontab==3.2.0
+redis

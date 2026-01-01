@@ -67,10 +67,14 @@ class ResetPasswordRequest(BaseModel):
 
     @validator("new_password")
     def password_strength(cls, v):
-        assert len(v) >= 8, "Password must be at least 8 characters"
-        assert any(c.islower() for c in v), "Password must contain at least one lowercase letter"
-        assert any(c.isupper() for c in v), "Password must contain at least one uppercase letter"
-        assert any(c.isdigit() for c in v), "Password must contain at least one digit"
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
         return v
 
 

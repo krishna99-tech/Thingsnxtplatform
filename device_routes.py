@@ -156,6 +156,12 @@ async def create_notification(
     widget_id: Optional[ObjectId] = None,
 ) -> None:
     """Create and store a notification, then push to SSE streams."""
+    # Ensure user_id is ObjectId (robustness check)
+    if isinstance(user_id, str):
+        user_id = safe_oid(user_id)
+    if not user_id:
+        return
+
     # Check user notification settings
     user = await db.users.find_one({"_id": user_id}, {"notification_settings": 1, "email": 1})
     if not user:
@@ -165,6 +171,7 @@ async def create_notification(
 
     # If notifications are globally disabled, stop here
     if settings.get("enabled") is False:
+        logger.debug(f"Notification suppressed for user {user_id}: Globally disabled")
         return
 
     now = datetime.utcnow()
@@ -183,6 +190,7 @@ async def create_notification(
     
     result = await db.notifications.insert_one(notification_doc)
     notification_id = result.inserted_id
+    logger.debug(f"Notification created for user {user_id}: {title}")
     
     # Prepare notification payload for SSE
     notification_payload = {
@@ -1432,7 +1440,7 @@ async def led_schedule_worker():
                             "$set": {
                                 "status": "failed",
                                 "error": "Missing widget/device reference",
-                                "executed_at": now,
+                                "executed_at": now_utc,
                             }
                         },
                     )
@@ -1447,7 +1455,7 @@ async def led_schedule_worker():
                             "$set": {
                                 "status": "failed",
                                 "error": "Invalid widget/device reference",
-                                "executed_at": now,
+                                "executed_at": now_utc,
                             }
                         },
                     )
@@ -1461,7 +1469,7 @@ async def led_schedule_worker():
                             "$set": {
                                 "status": "failed",
                                 "error": "Widget missing",
-                                "executed_at": now,
+                                "executed_at": now_utc,
                             }
                         },
                     )
@@ -1590,24 +1598,22 @@ async def notifications_health():
 
 @router.get("/notifications")
 async def get_notifications(
+    request: Request,
     current_user: dict = Depends(get_current_user),
     limit: int = 50,
-    unread_only: bool = False,
+    read: Optional[bool] = None
 ):
-    """Get notifications for the current user."""
     user_id = safe_oid(current_user["id"])
     if user_id is None:
         raise HTTPException(status_code=400, detail="Invalid user ID")
-    
+
     query = {"user_id": user_id}
-    if unread_only:
-        query["read"] = False
-    
+    if read is not None:
+        query["read"] = read
     notifications = []
     cursor = db.notifications.find(query).sort("created_at", -1).limit(limit)
     async for notif in cursor:
         notifications.append(doc_to_dict(notif))
-    
     return {"notifications": notifications}
 
 

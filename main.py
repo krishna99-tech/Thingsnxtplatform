@@ -62,8 +62,8 @@ app = FastAPI(
     title="ThingsNXT IoT Platform API",
     version="1.0.0",
     description="Production-ready FastAPI backend for IoT device management, telemetry, dashboards, and real-time updates.",
-    docs_url="/docs" if os.getenv("ENVIRONMENT", "development") == "development" else None,
-    redoc_url="/redoc" if os.getenv("ENVIRONMENT", "development") == "development" else None,
+    docs_url="/docs" if os.getenv("ENVIRONMENT", "development").lower() == "development" else None,
+    redoc_url="/redoc" if os.getenv("ENVIRONMENT", "development").lower() == "development" else None,
     lifespan=lifespan,  # Use lifespan context manager instead of deprecated on_event
 )
 

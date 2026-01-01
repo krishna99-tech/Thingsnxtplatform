@@ -88,7 +88,7 @@ class LedScheduleCreate(BaseModel):
         if v.tzinfo is None:
             # Assume input is in IST if no timezone info
             if ZoneInfo_available:
-                v = datetime.fromtimestamp(v.timestamp(), tz=IST)
+                v = v.replace(tzinfo=IST)
             else:
                 v = IST.localize(v)
         else:
