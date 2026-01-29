@@ -1,5 +1,7 @@
 # ThingsNXT Platform - Complete Function Flowchart
+```mermaid
 ---
+title: ThingsNXT Platform - Complete Function Flowchart
 config:
   theme: mc
   look: neo
@@ -298,6 +300,7 @@ flowchart TB
     class WEBSOCKET_ENDPOINT,CONNECT,DISCONNECT,BROADCAST,CONNECTION_MANAGER wsClass
     class START,STARTUP,SHUTDOWN mainClass
 ```
+```
 
 ## Function Summary by Module
 
@@ -429,4 +432,3 @@ flowchart TB
 - `shutdown_event` - Application shutdown
 
 ## Total Function Count: **83 functions**
-

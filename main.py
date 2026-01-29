@@ -6,10 +6,15 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from db import init_db
+from db import init_db, db
 # Import API Gateway and Background Tasks
 from api_gateway import api_gateway
 from device_routes import led_schedule_worker, auto_offline_checker
+
+from admin_routes import router as admin_router
+from utils import get_password_hash
+from datetime import datetime
+
 
 
 # Configure logging
@@ -41,6 +46,27 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(led_schedule_worker())
         logger.info("✅ LED schedule worker started")
+
+        # Seed Default Admin
+        admin_user = os.getenv("DEFAULT_ADMIN_USER", "admin")
+        admin_pass = os.getenv("DEFAULT_ADMIN_PASS", "admin123")
+        existing_admin = await db.users.find_one({"username": admin_user})
+        
+        if not existing_admin:
+            logger.info(f"Creating default admin user: {admin_user}")
+            await db.users.insert_one({
+                "username": admin_user,
+                "email": "admin@thingsnxt.com",
+                "hashed_password": get_password_hash(admin_pass),
+                "full_name": "System Administrator",
+                "is_active": True,
+                "is_admin": True,
+                "created_at": datetime.utcnow()
+            })
+        else:
+            if not existing_admin.get("is_admin"):
+                 await db.users.update_one({"_id": existing_admin["_id"]}, {"$set": {"is_admin": True}})
+
 
         logger.info("✅ Application startup complete")
     except Exception as e:
@@ -83,6 +109,7 @@ app.add_middleware(
 # Note: Frontend expects routes without /api prefix based on config.js
 # The gateway aggregates Auth, Device, WebSocket, and Event routes.
 app.include_router(api_gateway)
+app.include_router(admin_router)
 
 
 if __name__ == "__main__":

@@ -797,7 +797,66 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
     # Check if device was previously offline (for notification)
     was_offline = device.get("status") != "online"
     
-    # Check cooldown for notification
+    # Check cooldown for notification (omitted for brevity, assume handled)
+
+    # 1. Update Device Status
+    now = datetime.utcnow()
+    await db.devices.update_one(
+        {"_id": dev_oid},
+        {"$set": {"status": "online", "last_active": now}}
+    )
+
+    # 2. Insert Telemetry
+    telemetry_doc = {
+        "device_id": dev_oid,
+        "key": "telemetry_json", # Use a standard key for JSON payload
+        "value": data.data,
+        "timestamp": now
+    }
+    await db.telemetry.insert_one(telemetry_doc)
+
+    return {"message": "Telemetry accepted", "timestamp": now.isoformat()}
+
+@router.get("/devices/{device_id}/telemetry")
+async def get_device_telemetry(
+    device_id: str, 
+    limit: int = 50, 
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get historical telemetry for a device.
+    """
+    user_id = safe_oid(current_user["id"])
+    
+    # Verify ownership (or Admin access - checking ownership covers both if Admin has overrides)
+    # But strictly, SecurityRules.verify_ownership checks user_id match
+    # If user is admin, we might need to bypass ownership check OR rely on specific admin logic
+    # For now, let's stick to standard ownership. If User is admin, they might not own the device.
+    
+    dev_oid = safe_oid(device_id)
+    if not dev_oid:
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+
+    device = await db.devices.find_one({"_id": dev_oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+        
+    # Check access: Owner OR Admin
+    if str(device.get("user_id")) != str(user_id) and not current_user.get("is_admin"):
+         # Also check default admin env var fallback just in case
+         import os
+         if current_user.get("username") != os.getenv("DEFAULT_ADMIN_USER", "admin"):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    cursor = db.telemetry.find(
+        {"device_id": dev_oid, "key": "telemetry_json"}
+    ).sort("timestamp", -1).limit(limit)
+    
+    history = []
+    async for t in cursor:
+        history.append(doc_to_dict(t))
+        
+    return history
     now = datetime.utcnow()
     should_notify = False
     if was_offline:

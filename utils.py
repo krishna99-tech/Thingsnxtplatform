@@ -161,6 +161,34 @@ def send_reset_email(email: str, token: str) -> bool:
 
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
+        return False
+
+def send_broadcast_email(to_email: str, subject: str, message_content: str) -> bool:
+    """
+    Sends a branded broadcast email using the 'email_broadcast.html' template.
+    """
+    try:
+        # Context
+        context = {
+            "subject": subject,
+            "message": message_content,
+            "frontend_url": os.getenv("FRONTEND_URL", "http://localhost:3000"),
+            "year": datetime.now().year,
+        }
+
+        # Render
+        template = jinja_env.get_template("email_broadcast.html")
+        html_body = template.render(context)
+        
+        # Plain text fallback
+        text_body = f"{subject}\n\n{message_content}\n\n--\nThingsNXT IoT Platform"
+
+        return send_email(to_email, subject, html_body, text_body)
+
+    except Exception as e:
+        logger.error(f"Failed to send broadcast email to {to_email}: {e}", exc_info=True)
         return False
 
 # ============================================================

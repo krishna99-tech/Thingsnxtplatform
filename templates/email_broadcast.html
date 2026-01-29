@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>{{ subject }}</title>
+    <style>
+        /* Base */
+        body {
+            background-color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            -webkit-font-smoothing: antialiased;
+            font-size: 16px;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        /* Card */
+        .email-wrapper {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+        }
+
+        /* Header */
+        .header {
+            background-color: #0f172a; /* Slate 900 */
+            padding: 30px 40px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 800;
+            color: #ffffff;
+            text-decoration: none;
+            letter-spacing: -0.5px;
+        }
+
+        .logo span {
+            color: #60a5fa; /* Blue 400 */
+        }
+
+        /* Content */
+        .content {
+            padding: 40px;
+        }
+
+        .greeting {
+            font-size: 18px;
+            font-weight: 600;
+            color: #0f172a;
+            margin-bottom: 20px;
+        }
+
+        .message-body {
+            color: #475569;
+            margin-bottom: 30px;
+            white-space: pre-wrap; /* Preserve formatting */
+        }
+
+        /* Footer */
+        .footer {
+            background-color: #f1f5f9;
+            padding: 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #94a3b8;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .social-links {
+            margin-bottom: 15px;
+        }
+
+        .social-link {
+            color: #64748b;
+            text-decoration: none;
+            margin: 0 8px;
+            font-weight: 500;
+        }
+
+        .referral-box {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px dashed #cbd5e1;
+        }
+        
+        .referral-text {
+            color: #6366f1; /* Indigo */
+            font-weight: 600;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="email-wrapper">
+            <!-- Header -->
+            <div class="header">
+                <a href="https://thingsnxt.vercel.app" class="logo">
+                    Things<span>NXT</span>
+                </a>
+            </div>
+
+            <!-- Body -->
+            <div class="content">
+                <div class="greeting">Hello,</div>
+                <div class="message-body">
+                    {{ message }}
+                </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="footer">
+                <div class="social-links">
+                    <a href="https://thingsnxt.vercel.app/dashboard" class="social-link">Dashboard</a> •
+                    <a href="https://thingsnxt.vercel.app/support" class="social-link">Support</a> •
+                    <a href="https://thingsnxt.vercel.app" class="social-link">Website</a>
+                </div>
+                
+                <p>&copy; {{ year }} ThingsNXT. All rights reserved.</p>
+                <p>You received this email because you are a registered user of the ThingsNXT IoT Platform.</p>
+
+                <div class="referral-box">
+                    <p>Know someone who needs IoT solutions?</p>
+                    <a href="https://thingsnxt.vercel.app/documentation" class="referral-text">Invite them to ThingsNXT &rarr;</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
