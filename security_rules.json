@@ -25,7 +25,7 @@
   },
   "telemetry": {
     "$telemetry_id": {
-      ".read": "true",
+      ".read": "auth.uid == root.devices[data.device_id].user_id",
       ".write": "root.devices[data.device_id].device_token == device_token"
     }
   },
@@ -55,8 +55,8 @@
   },
   "reset_tokens": {
     "$token_id": {
-      ".read": "True",
-      ".write": "True"
+      ".read": "true",
+      ".write": "true"
     }
   }
 }

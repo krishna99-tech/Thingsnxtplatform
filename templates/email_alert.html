@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+    <title>System Alert | {{ app_name }}</title>
+    <style>
+        body {
+            background-color: #fef2f2;
+            /* Light red */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            color: #334155;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        .email-wrapper {
+            background-color: #ffffff;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            border: 1px solid #fee2e2;
+        }
+
+        .header {
+            background-color: #991b1b;
+            /* Red 800 */
+            padding: 20px 40px;
+            text-align: center;
+        }
+
+        .logo {
+            font-size: 20px;
+            font-weight: 800;
+            color: #ffffff;
+            text-decoration: none;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .alert-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #991b1b;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        }
+
+        .message-body {
+            color: #475569;
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #f8fafc;
+            border-left: 4px solid #ef4444;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+
+        .footer {
+            background-color: #f1f5f9;
+            padding: 30px;
+            text-align: center;
+            font-size: 12px;
+            color: #94a3b8;
+            border-top: 1px solid #e2e8f0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="email-wrapper">
+            <div class="header">
+                <a href="{{ frontend_url }}" class="logo">
+                    ThingsNXT System Alert
+                </a>
+            </div>
+            <div class="content">
+                <div class="alert-title">⚠️ {{ subject }}</div>
+                <div class="message-body">{{ message }}</div>
+                <p style="font-size: 13px; color: #64748b;">
+                    This is an automated system notification regarding your account or registered devices. Please log in
+                    to the portal for more details.
+                </p>
+            </div>
+            <div class="footer">
+                <p>&copy; {{ year }} ThingsNXT. All rights reserved.</p>
+                <a href="{{ frontend_url }}/support" style="color: #3b82f6; text-decoration: none;">Contact Technical
+                    Support</a>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

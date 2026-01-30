@@ -191,6 +191,53 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
         logger.error(f"Failed to send broadcast email to {to_email}: {e}", exc_info=True)
         return False
 
+def send_welcome_email(email: str, username: str) -> bool:
+    """Sends a welcome email to a newly registered user."""
+    try:
+        app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        
+        context = {
+            "username": username,
+            "app_name": app_name,
+            "frontend_url": frontend_url,
+            "year": datetime.now().year,
+        }
+        
+        subject = f"Welcome to {app_name}!"
+        template = jinja_env.get_template("email_welcome.html")
+        html_body = template.render(context)
+        text_body = f"Welcome to {app_name}, {username}!\nYour account is ready."
+        
+        return send_email(email, subject, html_body, text_body)
+    except Exception as e:
+        logger.error(f"Failed to send welcome email to {email}: {e}")
+        return False
+
+def send_user_alert_email(email: str, subject: str, message: str) -> bool:
+    """Sends a system alert or error notification to a specific user."""
+    try:
+        app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
+        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        
+        context = {
+            "subject": subject,
+            "message": message,
+            "app_name": app_name,
+            "frontend_url": frontend_url,
+            "year": datetime.now().year,
+        }
+        
+        full_subject = f"SYSTEM ALERT: {subject}"
+        template = jinja_env.get_template("email_alert.html")
+        html_body = template.render(context)
+        text_body = f"SYSTEM ALERT: {subject}\n\n{message}"
+        
+        return send_email(email, full_subject, html_body, text_body)
+    except Exception as e:
+        logger.error(f"Failed to send alert email to {email}: {e}")
+        return False
+
 # ============================================================
 # 🧩 MongoDB Helper
 # ============================================================

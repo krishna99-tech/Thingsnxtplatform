@@ -26,11 +26,13 @@ from utils import (
     create_access_token,
     create_refresh_token,
     send_reset_email,
+    send_welcome_email,
     SECRET_KEY,
     ALGORITHM,
     REFRESH_TOKEN_EXPIRE_DAYS,
     RESET_TOKEN_EXPIRE_HOURS,
 )
+from fastapi import BackgroundTasks
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
@@ -66,7 +68,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 # 🧩 Signup Route
 # ===============================================
 @router.post("/signup")
-async def signup(user: UserCreate):
+async def signup(user: UserCreate, background_tasks: BackgroundTasks):
     existing_user = await db.users.find_one(
         {"$or": [{"email": user.email}, {"username": user.username}]}
     )
@@ -92,6 +94,9 @@ async def signup(user: UserCreate):
     await db.refresh_tokens.insert_one(
         {"user_id": user_doc["_id"], "token": refresh, "expires_at": expires_at}
     )
+
+    # Dispatch welcome email asynchronously
+    background_tasks.add_task(send_welcome_email, user.email, user.username)
 
     return {
         "access_token": access,
