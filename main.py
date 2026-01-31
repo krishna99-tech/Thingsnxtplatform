@@ -59,6 +59,7 @@ async def lifespan(app: FastAPI):
                 "email": "admin@thingsnxt.com",
                 "hashed_password": get_password_hash(admin_pass),
                 "full_name": "System Administrator",
+                "role": "Admin",
                 "is_active": True,
                 "is_admin": True,
                 "created_at": datetime.utcnow()

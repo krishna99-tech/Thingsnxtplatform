@@ -81,6 +81,8 @@ async def signup(user: UserCreate, background_tasks: BackgroundTasks):
         "username": user.username,
         "hashed_password": hashed_pw,
         "full_name": user.full_name,
+        "role": "User",
+        "is_admin": False,
         "is_active": True,
         "created_at": datetime.utcnow(),
     }
@@ -134,6 +136,8 @@ async def token(form_data: OAuth2PasswordRequestForm = Depends()):
     await db.refresh_tokens.insert_one(
         {"user_id": user["_id"], "token": refresh, "expires_at": expires_at}
     )
+    # Update last login
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login": datetime.utcnow()}})
 
     return {
         "access_token": access,
@@ -172,6 +176,8 @@ async def login(user: UserLogin):
     await db.refresh_tokens.insert_one(
         {"user_id": user_db["_id"], "token": refresh, "expires_at": expires_at}
     )
+    # Update last login
+    await db.users.update_one({"_id": user_db["_id"]}, {"$set": {"last_login": datetime.utcnow()}})
 
     return {
         "access_token": access,

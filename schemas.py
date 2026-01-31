@@ -86,5 +86,8 @@ class UserOut(BaseModel):
     email: Optional[str]
     username: Optional[str]
     full_name: Optional[str]
+    role: Optional[str] = "User"
     is_active: bool
+    created_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
     notification_settings: Optional[Dict[str, Any]] = None

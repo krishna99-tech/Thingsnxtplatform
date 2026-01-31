@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from datetime import datetime
 import asyncio
@@ -43,6 +43,7 @@ class UserOutAdmin(BaseModel):
     username: str
     email: Optional[str] = None
     full_name: Optional[str] = None
+    role: Optional[str] = "User"
     is_active: bool
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
@@ -51,20 +52,63 @@ class DeviceOutAdmin(BaseModel):
     id: str
     name: str
     status: str
+    type: Optional[str] = "sensor"
+    location: Optional[str] = None
+    battery: Optional[int] = None
+    value: Optional[Any] = None
     last_active: Optional[datetime] = None
     user_id: Optional[str] = None
     device_token: Optional[str] = None
     owner_name: Optional[str] = None
     owner_email: Optional[str] = None
 
+class PaginatedResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    pages: int
+
+class UserListResponse(PaginatedResponse):
+    data: List[UserOutAdmin]
+
+class DeviceListResponse(PaginatedResponse):
+    data: List[DeviceOutAdmin]
+
+class ActivityListResponse(PaginatedResponse):
+    data: List[Dict[str, Any]]
+
 class DeviceCreateAdmin(BaseModel):
     name: str = "Unnamed Device"
     user_id: str
 
+class UserCreateRequest(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    role: str = "User"
+
+class UserUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class DeviceUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    location: Optional[str] = None
+    status: Optional[str] = None
+
+class DeviceControlRequest(BaseModel):
+    command: str
+    params: Dict[str, Any] = {}
 
 class DeviceTransferRequest(BaseModel):
     user_id: str
 
+class BulkDeleteRequest(BaseModel):
+    deviceIds: List[str]
 
 class UserAlertRequest(BaseModel):
     user_id: str
@@ -79,40 +123,180 @@ class BroadcastRequest(BaseModel):
 # ============================================================
 # 👥 User Management Routes
 # ============================================================
-@router.get("/users", response_model=List[UserOutAdmin])
-async def list_users(current_user: dict = Depends(verify_admin)):
-    """List all registered users."""
-    users = []
-    async for user in db.users.find({}):
-        u_dict = doc_to_dict(user)
-        # ID is already converted by doc_to_dict
-        users.append(u_dict)
-    return users
+@router.get("/users", response_model=UserListResponse)
+async def list_users(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search by username, email, or name"),
+    current_user: dict = Depends(verify_admin)
+):
+    """List registered users with pagination and search."""
+    query = {}
+    if search:
+        query = {
+            "$or": [
+                {"username": {"$regex": search, "$options": "i"}},
+                {"email": {"$regex": search, "$options": "i"}},
+                {"full_name": {"$regex": search, "$options": "i"}}
+            ]
+        }
 
-@router.get("/devices", response_model=List[DeviceOutAdmin])
-async def list_all_devices(current_user: dict = Depends(verify_admin)):
-    """List ALL devices in the system with owner details (Admin only)."""
+    total = await db.users.count_documents(query)
+    skip = (page - 1) * limit
+
+    users = []
+    cursor = db.users.find(query).sort("created_at", -1).skip(skip).limit(limit)
+    async for user in cursor:
+        u_dict = doc_to_dict(user)
+        users.append(u_dict)
+    
+    return {
+        "data": users,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit
+    }
+
+@router.post("/users", response_model=UserOutAdmin)
+async def create_user_admin(payload: UserCreateRequest, current_user: dict = Depends(verify_admin)):
+    """Create a new user (Admin only)."""
+    if await db.users.find_one({"$or": [{"email": payload.email}, {"username": payload.username}]}):
+        raise HTTPException(status_code=400, detail="User already exists")
+    
+    hashed_pw = get_password_hash(payload.password)
+    user_doc = {
+        "username": payload.username,
+        "email": payload.email,
+        "hashed_password": hashed_pw,
+        "full_name": payload.full_name,
+        "role": payload.role,
+        "is_admin": payload.role == "Admin",
+        "is_active": True,
+        "created_at": datetime.utcnow()
+    }
+    res = await db.users.insert_one(user_doc)
+    user_doc["_id"] = res.inserted_id
+    return doc_to_dict(user_doc)
+
+@router.put("/users/{user_id}", response_model=UserOutAdmin)
+async def update_user_admin(user_id: str, payload: UserUpdateRequest, current_user: dict = Depends(verify_admin)):
+    """Update user details."""
+    if not ObjectId.is_valid(user_id):
+        raise HTTPException(status_code=400, detail="Invalid ID")
+    
+    update_data = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if "role" in update_data:
+        update_data["is_admin"] = (update_data["role"] == "Admin")
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
+    updated = await db.users.find_one({"_id": ObjectId(user_id)})
+    return doc_to_dict(updated)
+
+@router.patch("/users/{user_id}/role")
+async def update_user_role(user_id: str, payload: dict, current_user: dict = Depends(verify_admin)):
+    """Update user role."""
+    role = payload.get("role")
+    if not role:
+         raise HTTPException(status_code=400, detail="Role required")
+    
+    await db.users.update_one(
+        {"_id": ObjectId(user_id)}, 
+        {"$set": {"role": role, "is_admin": role == "Admin"}}
+    )
+    return {"message": "Role updated"}
+
+@router.get("/devices", response_model=DeviceListResponse)
+async def list_all_devices(
+    page: int = Query(1, ge=1, description="Page number"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search by device name, token, or owner"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
+    current_user: dict = Depends(verify_admin)
+):
+    """List ALL devices with pagination, search, and owner details (Admin only)."""
+    
+    # Build Aggregation Pipeline
+    pipeline = []
+
+    # 1. Match Status
+    if status_filter:
+        pipeline.append({"$match": {"status": status_filter}})
+
+    # 2. Lookup Owner
+    pipeline.append({
+        "$lookup": {
+            "from": "users",
+            "localField": "user_id",
+            "foreignField": "_id",
+            "as": "owner"
+        }
+    })
+    pipeline.append({"$unwind": {"path": "$owner", "preserveNullAndEmptyArrays": True}})
+
+    # 3. Search (Device Name, Token, or Owner Details)
+    if search:
+        pipeline.append({
+            "$match": {
+                "$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"device_token": search},
+                    {"owner.username": {"$regex": search, "$options": "i"}},
+                    {"owner.email": {"$regex": search, "$options": "i"}}
+                ]
+            }
+        })
+
+    # 4. Facet for Pagination & Count
+    pipeline.append({
+        "$facet": {
+            "metadata": [{"$count": "total"}],
+            "data": [
+                {"$sort": {"created_at": -1}},
+                {"$skip": (page - 1) * limit},
+                {"$limit": limit}
+            ]
+        }
+    })
+
+    result = await db.devices.aggregate(pipeline).to_list(length=1)
+    
+    metadata = result[0]["metadata"]
+    data = result[0]["data"]
+    
+    total = metadata[0]["total"] if metadata else 0
+    
     devices = []
-    async for d in db.devices.find({}):
+    for d in data:
         device_dict = doc_to_dict(d)
         
-        # Fetch owner details with fallback for orphaned devices
-        user_id = device_dict.get("user_id")
-        if user_id and ObjectId.is_valid(user_id):
-            owner = await db.users.find_one({"_id": ObjectId(user_id)})
-            if owner:
-                device_dict["owner_name"] = owner.get("username", "Unknown")
-                device_dict["owner_email"] = owner.get("email", "N/A")
-            else:
-                device_dict["owner_name"] = "Orphaned (User Not Found)"
-                device_dict["owner_email"] = "N/A"
+        # Extract owner details from the joined data
+        owner = d.get("owner")
+        if owner:
+            device_dict["owner_name"] = owner.get("username", "Unknown")
+            device_dict["owner_email"] = owner.get("email", "N/A")
+            # Clean up nested owner dict from response
+            if "owner" in device_dict:
+                del device_dict["owner"]
         else:
             device_dict["user_id"] = None
             device_dict["owner_name"] = "System / Unassigned"
             device_dict["owner_email"] = "N/A"
+            if "owner" in device_dict:
+                del device_dict["owner"]
             
         devices.append(device_dict)
-    return devices
+        
+    return {
+        "data": devices,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit if limit > 0 else 0
+    }
 
 @router.post("/devices", response_model=DeviceOutAdmin)
 async def create_device_admin(payload: DeviceCreateAdmin, current_user: dict = Depends(verify_admin)):
@@ -248,6 +432,109 @@ async def get_device_dashboards(device_id: str, current_user: dict = Depends(ver
             dashboards.append(doc_to_dict(d))
 
     return dashboards
+
+@router.get("/devices/{device_id}", response_model=DeviceOutAdmin)
+async def get_device_detail_admin(device_id: str, current_user: dict = Depends(verify_admin)):
+    """Get detailed information about a specific device."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    device_oid = ObjectId(device_id)
+    device = await db.devices.find_one({"_id": device_oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    user = await db.users.find_one({"_id": device.get("user_id")})
+    device_dict = doc_to_dict(device)
+    if user:
+        device_dict["owner_name"] = user.get("username")
+        device_dict["owner_email"] = user.get("email")
+    
+    return device_dict
+
+@router.put("/devices/{device_id}", response_model=DeviceOutAdmin)
+async def update_device_admin(device_id: str, payload: DeviceUpdateRequest, current_user: dict = Depends(verify_admin)):
+    """Update device details as administrator."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    update_data = {k: v for k, v in payload.dict(exclude_unset=True).items() if v is not None}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    await db.devices.update_one({"_id": ObjectId(device_id)}, {"$set": update_data})
+    updated = await db.devices.find_one({"_id": ObjectId(device_id)})
+    
+    user = await db.users.find_one({"_id": updated.get("user_id")})
+    device_dict = doc_to_dict(updated)
+    if user:
+        device_dict["owner_name"] = user.get("username")
+        device_dict["owner_email"] = user.get("email")
+    
+    return device_dict
+
+@router.delete("/devices/{device_id}")
+async def delete_device_admin(device_id: str, current_user: dict = Depends(verify_admin)):
+    """Delete a device as administrator."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    oid = ObjectId(device_id)
+    device = await db.devices.find_one({"_id": oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    await db.devices.delete_one({"_id": oid})
+    await db.telemetry.delete_many({"device_id": oid})
+    
+    # Log activity
+    await db.admin_activity.insert_one({
+        "action": "delete_device",
+        "admin_id": ObjectId(current_user["id"]),
+        "device_name": device.get("name"),
+        "timestamp": datetime.utcnow()
+    })
+    
+    return {"message": "Device deleted successfully"}
+
+@router.post("/devices/{device_id}/control")
+async def control_device_admin(device_id: str, payload: DeviceControlRequest, current_user: dict = Depends(verify_admin)):
+    """Expert control over a device from admin console."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    oid = ObjectId(device_id)
+    device = await db.devices.find_one({"_id": oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Logic for control (e.g. broadcasting to WebSocket if device is listening)
+    from websocket_manager import manager
+    await manager.broadcast(
+        str(device["user_id"]),
+        {
+            "type": "control_command",
+            "device_id": device_id,
+            "command": payload.command,
+            "params": payload.params,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+    
+    # Additional logic for specific commands if needed (e.g. toggle_power)
+    if payload.command == "toggle_power":
+        status_val = payload.params.get("status", "offline")
+        await db.devices.update_one({"_id": oid}, {"$set": {"status": status_val}})
+        # Broadcast status update
+        from event_manager import event_manager
+        asyncio.create_task(event_manager.broadcast({
+            "type": "status_update",
+            "device_id": device_id,
+            "status": status_val,
+            "timestamp": datetime.utcnow().isoformat()
+        }))
+
+    return {"message": f"Command {payload.command} dispatched"}
 
 @router.get("/devices/{device_id}/telemetry")
 async def get_device_telemetry_admin(device_id: str, current_user: dict = Depends(verify_admin)):
@@ -491,6 +778,11 @@ async def get_analytics(current_user: dict = Depends(verify_admin)):
         }
     }
 
+@router.get("/analytics/stats")
+async def get_analytics_stats(current_user: dict = Depends(verify_admin)):
+    """Alias for analytics stats used by frontend."""
+    return await get_analytics(current_user)
+
 
 # ============================================================
 # 📥 DATA EXPORT ENDPOINTS
@@ -527,15 +819,79 @@ async def export_activity(current_user: dict = Depends(verify_admin)):
     
     return {"data": logs, "count": len(logs)}
 
+@router.post("/export/device/{device_id}")
+async def export_device_data(device_id: str, payload: dict, current_user: dict = Depends(verify_admin)):
+    """Export device telemetry as JSON."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    device_oid = ObjectId(device_id)
+    telemetry = []
+    # Mocking date range filtering for now
+    async for t in db.telemetry.find({"device_id": device_oid}).sort("timestamp", -1).limit(1000):
+        telemetry.append(doc_to_dict(t))
+    
+    return {"data": telemetry, "count": len(telemetry)}
 
-@router.get("/activity")
-async def get_admin_activity(current_user: dict = Depends(verify_admin)):
-    """Get recent admin actions/notifications."""
-    cursor = db.admin_activity.find({}).sort("timestamp", -1).limit(50)
+@router.post("/devices/bulk-delete")
+async def bulk_delete_devices(payload: BulkDeleteRequest, current_user: dict = Depends(verify_admin)):
+    """Delete multiple devices at once."""
+    oids = [ObjectId(did) for did in payload.deviceIds if ObjectId.is_valid(did)]
+    if not oids:
+        raise HTTPException(status_code=400, detail="No valid device IDs provided")
+    
+    await db.devices.delete_many({"_id": {"$in": oids}})
+    await db.telemetry.delete_many({"device_id": {"$in": oids}})
+    
+    return {"message": f"Deleted {len(oids)} devices"}
+
+@router.post("/devices/bulk-update")
+async def bulk_update_devices_admin(payload: dict, current_user: dict = Depends(verify_admin)):
+    """Update multiple devices status or config."""
+    device_ids = payload.get("deviceIds", [])
+    updates = payload.get("updates", {})
+    
+    oids = [ObjectId(did) for did in device_ids if ObjectId.is_valid(did)]
+    if not oids:
+        raise HTTPException(status_code=400, detail="No valid device IDs or updates provided")
+    
+    await db.devices.update_many({"_id": {"$in": oids}}, {"$set": updates})
+    
+    return {"message": f"Updated {len(oids)} devices"}
+
+
+@router.get("/activity", response_model=ActivityListResponse)
+async def get_admin_activity(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=100),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    current_user: dict = Depends(verify_admin)
+):
+    """Get recent admin actions/notifications with pagination and date filtering."""
+    query = {}
+    if start_date or end_date:
+        query["timestamp"] = {}
+        if start_date:
+            query["timestamp"]["$gte"] = datetime.fromisoformat(start_date)
+        if end_date:
+            # End of day for end_date
+            query["timestamp"]["$lte"] = datetime.fromisoformat(end_date).replace(hour=23, minute=59, second=59)
+
+    total = await db.admin_activity.count_documents(query)
+    skip = (page - 1) * limit
+    
+    cursor = db.admin_activity.find(query).sort("timestamp", -1).skip(skip).limit(limit)
     activities = []
     async for doc in cursor:
         activities.append(doc_to_dict(doc))
-    return activities
+    return {
+        "data": activities,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit
+    }
 
 
 @router.get("/notifications")
@@ -553,3 +909,30 @@ async def get_notifications(current_user: dict = Depends(verify_admin)):
         }
         notifications.append(notif)
     return notifications
+
+@router.get("/alerts")
+async def get_alerts(current_user: dict = Depends(verify_admin)):
+    """Get active alerts (devices with warning status)."""
+    cursor = db.devices.find({"status": "warning"})
+    alerts = []
+    async for d in cursor:
+        d_dict = doc_to_dict(d)
+        d_dict["message"] = "Device status warning"
+        alerts.append(d_dict)
+    return alerts
+
+@router.get("/analytics/devices/{device_id}/metrics")
+async def get_device_metrics_admin(device_id: str, range: str = "24h", current_user: dict = Depends(verify_admin)):
+    """Get device metrics for charts."""
+    if not ObjectId.is_valid(device_id):
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    
+    # Simple mock/fetch logic to match frontend expectation
+    # In production, query time-series data
+    telemetry = await db.telemetry.find_one({"device_id": ObjectId(device_id), "key": "telemetry_json"})
+    if not telemetry:
+        return []
+    
+    # Return a single point for now, or mock history
+    val = telemetry.get("value", {})
+    return [{"time": datetime.utcnow().strftime("%H:%M"), **val}]
