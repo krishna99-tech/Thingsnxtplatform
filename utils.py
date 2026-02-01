@@ -59,7 +59,7 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USER = os.getenv("EMAIL_USER","electrogadgedc@gmail.com")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD","ybkcseepobjiwfpr")
 EMAIL_FROM = os.getenv("EMAIL_FROM") or EMAIL_USER
-EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME")
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "ThingsNXT")
 
 pwd_context = CryptContext(schemes=[os.getenv("PWD_SCHEME", "bcrypt")], deprecated="auto")
 
@@ -146,7 +146,7 @@ def send_reset_email(email: str, token: str) -> bool:
         context = {
             "token": token,
             "app_name": app_name,
-            "frontend_url": frontend_url,
+            "FRONTEND_URL": frontend_url,
             "web_reset_link": f"{frontend_url}/reset-password?token={token}",
             "app_reset_link": f"{app_scheme}://reset-password?token={token}" if app_scheme else None,
             "copyright_text": f"© {datetime.now().year} {app_name}. All rights reserved.",
@@ -182,7 +182,7 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
             "subject": subject,
             "message": message_content,
             "app_name": app_name,
-            "frontend_url": frontend_url,
+            "FRONTEND_URL": frontend_url,
             "year": datetime.now().year,
         }
 
@@ -208,7 +208,7 @@ def send_welcome_email(email: str, username: str) -> bool:
         context = {
             "username": username,
             "app_name": app_name,
-            "frontend_url": frontend_url,
+            "FRONTEND_URL": frontend_url,
             "year": datetime.now().year,
         }
         
@@ -233,7 +233,7 @@ def send_user_alert_email(email: str, subject: str, message: str) -> bool:
             "subject": subject,
             "message": message,
             "app_name": app_name,
-            "frontend_url": frontend_url,
+            "FRONTEND_URL": frontend_url,
             "app_login_link": f"{app_scheme}://login" if app_scheme else None,
             "year": datetime.now().year,
         }

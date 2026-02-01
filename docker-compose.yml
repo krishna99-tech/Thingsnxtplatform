@@ -37,8 +37,12 @@ services:
       - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
       - APP_NAME=${APP_NAME:-ThingsNXT IoT Platform}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:3000}
+      - FRONTEND_URL=${FRONTEND_URL:-https://thingsnxt.vercel.app}
       - COMPANY_NAME=${COMPANY_NAME:-ThingsNXT}
+      - COPYRIGHT_TEXT=${COPYRIGHT_TEXT:-© 2026 ThingsNXT. All rights reserved.}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-ThingsNXT Support}
+
+      # Redis Configuration
       - REDIS_URL=redis://redis:6379
     networks:
       - app-network

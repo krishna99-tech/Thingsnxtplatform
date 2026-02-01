@@ -57,8 +57,8 @@
         }
 
         .greeting {
-            font-size: 18px;
-            font-weight: 600;
+            font-size: 20px;
+            font-weight: 700;
             color: #0f172a;
             margin-bottom: 20px;
         }
@@ -97,7 +97,7 @@
         }
         
         .referral-text {
-            color: #6366f1; /* Indigo */
+            color: #3b82f6; /* Blue 500 */
             font-weight: 600;
             text-decoration: none;
         }
@@ -108,7 +108,7 @@
         <div class="email-wrapper">
             <!-- Header -->
             <div class="header">
-                <a href="https://thingsnxt.vercel.app" class="logo">
+                <a href="{{ FRONTEND_URL }}" class="logo">
                     Things<span>NXT</span>
                 </a>
             </div>
@@ -124,17 +124,17 @@
             <!-- Footer -->
             <div class="footer">
                 <div class="social-links">
-                    <a href="https://thingsnxt.vercel.app/dashboard" class="social-link">Dashboard</a> •
-                    <a href="https://thingsnxt.vercel.app/support" class="social-link">Support</a> •
-                    <a href="https://thingsnxt.vercel.app" class="social-link">Website</a>
+                    <a href="{{ FRONTEND_URL }}/dashboard" class="social-link">Dashboard</a> •
+                    <a href="{{ FRONTEND_URL }}/support" class="social-link">Support</a> •
+                    <a href="{{ FRONTEND_URL }}" class="social-link">Website</a>
                 </div>
                 
-                <p>&copy; {{ year }} ThingsNXT. All rights reserved.</p>
-                <p>You received this email because you are a registered user of the ThingsNXT IoT Platform.</p>
+                <p>&copy; {{ year }} {{ app_name }}. All rights reserved.</p>
+                <p>You received this email because you are a registered user of the {{ app_name }} IoT Platform.</p>
 
                 <div class="referral-box">
                     <p>Know someone who needs IoT solutions?</p>
-                    <a href="https://thingsnxt.vercel.app/documentation" class="referral-text">Invite them to ThingsNXT &rarr;</a>
+                    <a href="{{ FRONTEND_URL }}/documentation" class="referral-text">Invite them to {{ app_name }} &rarr;</a>
                 </div>
             </div>
         </div>
