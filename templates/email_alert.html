@@ -104,7 +104,7 @@
         <div class="email-wrapper">
             <!-- Header -->
             <div class="header">
-                <a href="{{ frontend_url }}" class="logo">
+                <a href="{{ FRONTEND_URL }}" class="logo">
                     Things<span>NXT</span>
                 </a>
             </div>
@@ -116,15 +116,15 @@
                 
                 <p style="font-size: 14px; color: #64748b; line-height: 1.5; margin-top: 24px;">
                     This is an automated system notification regarding your account or registered devices. 
-                    Please <a href="{{ frontend_url }}/login" style="color: #991b1b; text-decoration: underline;">log in to the portal</a> for more details.
+                    Please <a href="{{ FRONTEND_URL }}/login" style="color: #991b1b; text-decoration: underline;">log in to the portal</a>{% if app_login_link %} or <a href="{{ app_login_link }}" style="color: #991b1b; text-decoration: underline;">open in app</a>{% endif %} for more details.
                 </p>
             </div>
 
             <!-- Footer -->
             <div class="footer">
                 <div class="social-links">
-                    <a href="{{ frontend_url }}/dashboard" class="social-link">Dashboard</a> •
-                    <a href="{{ frontend_url }}/support" class="social-link">Support</a>
+                    <a href="{{ FRONTEND_URL }}/dashboard" class="social-link">Dashboard</a> •
+                    <a href="{{ FRONTEND_URL }}/support" class="social-link">Support</a>
                 </div>
                 
                 <p>&copy; {{ year }} {{ app_name }}. All rights reserved.</p>

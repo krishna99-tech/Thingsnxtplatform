@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import formataddr
 from jinja2 import Environment, FileSystemLoader
 from bson import ObjectId
 import pytz
@@ -58,6 +59,7 @@ EMAIL_PORT = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USER = os.getenv("EMAIL_USER","electrogadgedc@gmail.com")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD","ybkcseepobjiwfpr")
 EMAIL_FROM = os.getenv("EMAIL_FROM") or EMAIL_USER
+EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME")
 
 pwd_context = CryptContext(schemes=[os.getenv("PWD_SCHEME", "bcrypt")], deprecated="auto")
 
@@ -109,7 +111,12 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> b
 
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
-        message["From"] = EMAIL_FROM or EMAIL_USER
+        
+        sender_email = EMAIL_FROM or EMAIL_USER
+        if EMAIL_FROM_NAME:
+            message["From"] = formataddr((EMAIL_FROM_NAME, sender_email))
+        else:
+            message["From"] = sender_email
         message["To"] = to_email
 
         message.attach(MIMEText(text_body, "plain"))
@@ -131,10 +138,10 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> b
 def send_reset_email(email: str, token: str) -> bool:
     """Sends a password reset email using Jinja2 templates."""
     try:
-        # 1. Prepare template context from environment variables
-        app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
+        # Standard configuration
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
         frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        app_scheme = os.getenv("APP_SCHEME")
+        app_scheme = os.getenv("APP_SCHEME", "ThingsNXT")
 
         context = {
             "token": token,
@@ -142,12 +149,11 @@ def send_reset_email(email: str, token: str) -> bool:
             "frontend_url": frontend_url,
             "web_reset_link": f"{frontend_url}/reset-password?token={token}",
             "app_reset_link": f"{app_scheme}://reset-password?token={token}" if app_scheme else None,
-            "copyright_text": f"© {datetime.now().year} {os.getenv('COMPANY_NAME', 'ThingsNXT')}",
+            "copyright_text": f"© {datetime.now().year} {app_name}. All rights reserved.",
         }
 
         subject = f"{app_name} — Password Reset Request"
 
-        # 2. Render templates and send
         try:
             html_template = jinja_env.get_template("email_reset.html")
             text_template = jinja_env.get_template("email_reset.txt")
@@ -161,8 +167,6 @@ def send_reset_email(email: str, token: str) -> bool:
 
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
-    except Exception as e:
-        logger.error(f"Failed to send password reset email to {email}: {e}", exc_info=True)
         return False
 
 def send_broadcast_email(to_email: str, subject: str, message_content: str) -> bool:
@@ -170,11 +174,15 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
     Sends a branded broadcast email using the 'email_broadcast.html' template.
     """
     try:
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
+        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
+
         # Context
         context = {
             "subject": subject,
             "message": message_content,
-            "frontend_url": os.getenv("FRONTEND_URL", "http://localhost:3000"),
+            "app_name": app_name,
+            "frontend_url": frontend_url,
             "year": datetime.now().year,
         }
 
@@ -183,7 +191,7 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
         html_body = template.render(context)
         
         # Plain text fallback
-        text_body = f"{subject}\n\n{message_content}\n\n--\nThingsNXT IoT Platform"
+        text_body = f"{subject}\n\n{message_content}\n\n--\n{app_name}"
 
         return send_email(to_email, subject, html_body, text_body)
 
@@ -194,8 +202,8 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
 def send_welcome_email(email: str, username: str) -> bool:
     """Sends a welcome email to a newly registered user."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
+        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
         
         context = {
             "username": username,
@@ -217,14 +225,16 @@ def send_welcome_email(email: str, username: str) -> bool:
 def send_user_alert_email(email: str, subject: str, message: str) -> bool:
     """Sends a system alert or error notification to a specific user."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT IoT Platform")
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
+        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
+        app_scheme = os.getenv("APP_SCHEME", "ThingsNXT")
         
         context = {
             "subject": subject,
             "message": message,
             "app_name": app_name,
             "frontend_url": frontend_url,
+            "app_login_link": f"{app_scheme}://login" if app_scheme else None,
             "year": datetime.now().year,
         }
         

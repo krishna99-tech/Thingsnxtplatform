@@ -224,26 +224,24 @@ async def create_notification(
             },
         )
 
-    # Send Email Notification if enabled
+    # Send Premium Email Notification if enabled
     if settings.get("email", True) is not False and user.get("email"):
-        email_subject = f"Notification: {title}"
-        email_html = f"""
-        <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 8px;">
-            <h2 style="color: #333;">{title}</h2>
-            <p style="font-size: 16px; color: #555;">{message}</p>
-            {f'<p style="background: #f9f9f9; padding: 10px; border-left: 4px solid #007bff;">{details}</p>' if details else ''}
-            <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
-            <p style="font-size: 12px; color: #999;">
-                Time: {now.strftime("%Y-%m-%d %H:%M:%S UTC")}<br>
-                Device ID: {device_id or 'N/A'}
-            </p>
-        </div>
-        """
-        email_text = f"{title}\n\n{message}\n\n{details or ''}\n\nTime: {now.strftime('%Y-%m-%d %H:%M:%S UTC')}"
+        # Use the premium alert utility
+        from utils import send_user_alert_email
+        
+        # Prepare the message content
+        full_message = f"{message}"
+        if details:
+            full_message += f"<br><br><strong>Details:</strong><br>{details}"
+        if device_id:
+            full_message += f"<br><br><small>Device ID: {device_id}</small>"
         
         # Send in background thread to avoid blocking the async event loop
         asyncio.create_task(asyncio.to_thread(
-            send_email, user["email"], email_subject, email_html, email_text
+            send_user_alert_email, 
+            user["email"], 
+            title, 
+            full_message
         ))
 
 
