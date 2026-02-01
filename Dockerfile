@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.10-slim
+FROM python:3.11-slim
 
 # Set environment variables
 # PYTHONDONTWRITEBYTECODE: Prevents Python from writing pyc files to disc
@@ -44,5 +44,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run the application
 # We use the host 0.0.0.0 to allow external access to the container
-# Use uvicorn with workers for production (adjust workers based on CPU cores)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--log-level", "info"]
+# NOTE: Using single worker to ensure in-memory WebSocket (ConnectionManager) state works correctly.
+# For multi-worker scaling, a Redis Pub/Sub layer must be implemented for WebSocket broadcasting.
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "info"]

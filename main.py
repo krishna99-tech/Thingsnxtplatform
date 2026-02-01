@@ -115,4 +115,6 @@ app.include_router(admin_router)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    # Use the app instance directly to avoid Windows multiprocessing issues.
+    # Note: 'reload' is not supported when passing the app object directly.
+    uvicorn.run(app, host="0.0.0.0", port=8000)
