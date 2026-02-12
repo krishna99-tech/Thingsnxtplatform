@@ -28,7 +28,7 @@ services:
       # Application Configuration
       - ENVIRONMENT=${ENVIRONMENT:-development}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://thingsnxt.vercel.app,http://localhost:5173}
       - OFFLINE_TIMEOUT=${OFFLINE_TIMEOUT:-20}
       # Email Configuration (optional)
       - EMAIL_HOST=${EMAIL_HOST:-smtp.gmail.com}

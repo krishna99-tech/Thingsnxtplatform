@@ -22,14 +22,15 @@ def verify_admin(current_user: dict = Depends(get_current_user)):
     Dependency to ensure the user has admin privileges.
     Checks for 'is_admin' flag or compares against default admin username.
     """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
     # 1. Check for specific admin flag
     if current_user.get("is_admin"):
         return current_user
         
-    # 2. Fallback: Check against default environment variable (for safety)
-    import os
+    # 2. Fallback: Check against default environment variable
     default_admin = os.getenv("DEFAULT_ADMIN_USER", "admin")
-    
     if current_user.get("username") == default_admin:
         return current_user
         
@@ -43,10 +44,14 @@ class UserOutAdmin(BaseModel):
     username: str
     email: Optional[str] = None
     full_name: Optional[str] = None
-    role: Optional[str] = "User"
-    is_active: bool
-    created_at: Optional[datetime] = None
-    last_login: Optional[datetime] = None
+    role: Any = "User" # Use Any to prevent validation crash if DB has objects
+    access_right: Optional[str] = "Standard"
+    is_active: bool = True
+    created_at: Optional[Any] = None
+    last_login: Optional[Any] = None
+
+    class Config:
+        from_attributes = True
 
 class DeviceOutAdmin(BaseModel):
     id: str
@@ -56,7 +61,7 @@ class DeviceOutAdmin(BaseModel):
     location: Optional[str] = None
     battery: Optional[int] = None
     value: Optional[Any] = None
-    last_active: Optional[datetime] = None
+    last_active: Optional[Any] = None
     user_id: Optional[str] = None
     device_token: Optional[str] = None
     owner_name: Optional[str] = None
@@ -91,7 +96,8 @@ class UserCreateRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
-    role: Optional[str] = None
+    role: Optional[Any] = None
+    access_right: Optional[str] = None
     is_active: Optional[bool] = None
 
 class DeviceUpdateRequest(BaseModel):
@@ -118,16 +124,40 @@ class UserAlertRequest(BaseModel):
 class BroadcastRequest(BaseModel):
     subject: str
     message: str
-    recipients: Optional[List[str]] = None  # List of emails, if None send to all
+    recipients: Optional[List[str]] = None
+
+# ============================================================
+# 🛠️ Helpers
+# ============================================================
+def sanitize_user(user_dict: dict) -> dict:
+    """Ensure user dictionary fields are compatible with response models."""
+    if not user_dict:
+        return {}
+    
+    # Ensure role is a string
+    role = user_dict.get("role", "User")
+    if isinstance(role, dict):
+        user_dict["role"] = role.get("role", "User")
+    elif not isinstance(role, str):
+        user_dict["role"] = str(role)
+
+    # Ensure defaults
+    if "is_active" not in user_dict:
+        user_dict["is_active"] = True
+    
+    if "access_right" not in user_dict:
+        user_dict["access_right"] = "Standard"
+    
+    return user_dict
 
 # ============================================================
 # 👥 User Management Routes
 # ============================================================
-@router.get("/users", response_model=UserListResponse)
+@router.get("/users")
 async def list_users(
-    page: int = Query(1, ge=1, description="Page number"),
-    limit: int = Query(20, ge=1, le=100, description="Items per page"),
-    search: Optional[str] = Query(None, description="Search by username, email, or name"),
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None),
     current_user: dict = Depends(verify_admin)
 ):
     """List registered users with pagination and search."""
@@ -148,14 +178,14 @@ async def list_users(
     cursor = db.users.find(query).sort("created_at", -1).skip(skip).limit(limit)
     async for user in cursor:
         u_dict = doc_to_dict(user)
-        users.append(u_dict)
+        users.append(sanitize_user(u_dict))
     
     return {
         "data": users,
         "total": total,
         "page": page,
         "limit": limit,
-        "pages": (total + limit - 1) // limit
+        "pages": (total + limit - 1) // limit if limit > 0 else 0
     }
 
 @router.post("/users", response_model=UserOutAdmin)
@@ -177,7 +207,7 @@ async def create_user_admin(payload: UserCreateRequest, current_user: dict = Dep
     }
     res = await db.users.insert_one(user_doc)
     user_doc["_id"] = res.inserted_id
-    return doc_to_dict(user_doc)
+    return sanitize_user(doc_to_dict(user_doc))
 
 @router.put("/users/{user_id}", response_model=UserOutAdmin)
 async def update_user_admin(user_id: str, payload: UserUpdateRequest, current_user: dict = Depends(verify_admin)):
@@ -187,6 +217,9 @@ async def update_user_admin(user_id: str, payload: UserUpdateRequest, current_us
     
     update_data = {k: v for k, v in payload.dict(exclude_unset=True).items()}
     if "role" in update_data:
+        # Handle role object if sent by accident
+        if isinstance(update_data["role"], dict):
+            update_data["role"] = update_data["role"].get("role", "User")
         update_data["is_admin"] = (update_data["role"] == "Admin")
     
     if not update_data:
@@ -194,7 +227,7 @@ async def update_user_admin(user_id: str, payload: UserUpdateRequest, current_us
 
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": update_data})
     updated = await db.users.find_one({"_id": ObjectId(user_id)})
-    return doc_to_dict(updated)
+    return sanitize_user(doc_to_dict(updated))
 
 @router.patch("/users/{user_id}/role")
 async def update_user_role(user_id: str, payload: dict, current_user: dict = Depends(verify_admin)):
@@ -203,6 +236,10 @@ async def update_user_role(user_id: str, payload: dict, current_user: dict = Dep
     if not role:
          raise HTTPException(status_code=400, detail="Role required")
     
+    # Handle role object
+    if isinstance(role, dict):
+        role = role.get("role", "User")
+        
     await db.users.update_one(
         {"_id": ObjectId(user_id)}, 
         {"$set": {"role": role, "is_admin": role == "Admin"}}
@@ -686,11 +723,12 @@ async def update_security_rules(rules: dict, current_user: dict = Depends(verify
 # ============================================================
 # 👤 USER DETAIL ENDPOINT
 # ============================================================
-@router.get("/users/{user_id}")
+# ============================================================
+# 👤 USER DETAIL ENDPOINT
+# ============================================================
+@router.get("/users/{user_id}", response_model=UserOutAdmin)
 async def get_user_detail(user_id: str, current_user: dict = Depends(verify_admin)):
     """Get detailed information about a specific user including their devices and activity."""
-    from bson import ObjectId
-    
     if not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=400, detail="Invalid user ID")
     
@@ -707,7 +745,13 @@ async def get_user_detail(user_id: str, current_user: dict = Depends(verify_admi
     
     # Get recent activity (last 20 actions)
     activity = []
-    async for log in db.admin_activity.find({"recipient": user.get("email")}).sort("timestamp", -1).limit(20):
+    async for log in db.admin_activity.find({
+        "$or": [
+            {"target_user_id": user_oid},
+            {"recipient": user.get("email")},
+            {"target_email": user.get("email")}
+        ]
+    }).sort("timestamp", -1).limit(20):
         activity.append(doc_to_dict(log))
     
     user_dict = doc_to_dict(user)
@@ -715,7 +759,7 @@ async def get_user_detail(user_id: str, current_user: dict = Depends(verify_admi
     user_dict["recent_activity"] = activity
     user_dict["device_count"] = len(devices)
     
-    return user_dict
+    return sanitize_user(user_dict)
 
 
 # ============================================================

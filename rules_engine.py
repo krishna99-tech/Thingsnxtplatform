@@ -85,9 +85,10 @@ class RulesEngine:
                 return RulesEngine.SafeNone()
             return val
 
-    async def validate_rule(self, collection_name: str, operation: str, user_id: Any, resource_data: Dict[str, Any], extra_context: Dict[str, Any] = None) -> bool:
+    async def validate_rule(self, collection_name: str, operation: str, auth_user: Any, resource_data: Dict[str, Any], extra_context: Dict[str, Any] = None) -> bool:
         """
         Evaluates the security rule for the given context.
+        auth_user can be a user_id string/ObjectId OR a full user dictionary.
         """
         # Ensure rules are up to date (throttled check)
         self.load_rules()
@@ -100,9 +101,14 @@ class RulesEngine:
             return False
 
         # Prepare Context
-        # Convert ObjectIds to strings for comparison in rules
-        user_id_str = str(user_id) if user_id else None
-        
+        # Normalize auth_user
+        auth_context_data = {"uid": None, "access_right": "Standard"}
+        if isinstance(auth_user, dict):
+            auth_context_data["uid"] = str(auth_user.get("_id") or auth_user.get("id"))
+            auth_context_data["access_right"] = auth_user.get("access_right", "Standard")
+        else:
+            auth_context_data["uid"] = str(auth_user) if auth_user else None
+
         # Normalize resource data (ensure IDs are strings)
         if resource_data and isinstance(resource_data, dict) and "_id" not in resource_data:
             # If already a dict without _id (e.g. custom context from device_routes), use as is
@@ -111,7 +117,7 @@ class RulesEngine:
             data_dict = self.MockObject(doc_to_dict(resource_data)) if resource_data else self.MockObject({})
         
         context = {
-            "auth": self.MockObject({"uid": user_id_str}),
+            "auth": self.MockObject(auth_context_data),
             "data": data_dict,
             "root": self.MockObject({})
         }

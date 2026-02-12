@@ -22,7 +22,10 @@ from utils import (
     IST, 
     ZoneInfo_available,
     ZoneInfo,
-    send_email
+    send_email,
+    send_device_registered_email,
+    send_device_status_email,
+    send_user_alert_email
 )
 from websocket_manager import manager
 from event_manager import event_manager # 👈 Import the global event manager
@@ -82,7 +85,7 @@ def safe_oid(value: str) -> Optional[ObjectId]:
 # ============================================================
 class SecurityRules:
     @staticmethod
-    async def verify_ownership(collection, resource_id: str, user_id: ObjectId, resource_name: str = "Resource") -> Dict[str, Any]:
+    async def verify_ownership(collection, resource_id: str, auth_user: Any, resource_name: str = "Resource") -> Dict[str, Any]:
         """
         Enforces .read/.write rule: auth.uid === resource.user_id
         """
@@ -97,7 +100,7 @@ class SecurityRules:
         # Determine collection name for rules lookup (e.g. db.devices -> "devices")
         collection_name = collection.name
         
-        is_allowed = await rules_engine.validate_rule(collection_name, ".write", user_id, resource)
+        is_allowed = await rules_engine.validate_rule(collection_name, ".write", auth_user, resource)
         if not is_allowed:
              raise HTTPException(status_code=403, detail="Access denied by security rules")
 
@@ -440,7 +443,7 @@ async def apply_led_state(device_id: ObjectId, state: bool, virtual_pin: Optiona
         )
 
 
-async def ensure_led_widget_access(widget_oid: ObjectId, user_id: ObjectId):
+async def ensure_led_widget_access(widget_oid: ObjectId, auth_user: Any):
     """Validate widget ownership and LED requirements."""
     # 1. Verify Widget Exists
     widget = await db.widgets.find_one({"_id": widget_oid})
@@ -448,7 +451,7 @@ async def ensure_led_widget_access(widget_oid: ObjectId, user_id: ObjectId):
         raise HTTPException(status_code=404, detail="Widget not found")
 
     # 2. Verify Dashboard Ownership (Rule: auth.uid == dashboard.user_id)
-    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), user_id, "Dashboard")
+    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), auth_user, "Dashboard")
     
     # 3. Verify Widget Type
     if widget.get("type") != "led":
@@ -484,7 +487,7 @@ async def patch_widget(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Widget not found")
 
     # Rule: Write access requires Dashboard ownership
-    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), user_id, "Dashboard")
+    await SecurityRules.verify_ownership(db.dashboards, str(widget["dashboard_id"]), current_user, "Dashboard")
 
     # Allowed fields for partial update
     allowed = {"label", "config", "value"}
@@ -552,9 +555,8 @@ async def set_led_state(
             detail="Invalid widget ID"
         )
 
-    user_id = safe_oid(current_user["id"])
     try:
-        widget, device_id = await ensure_led_widget_access(widget_oid, user_id)
+        widget, device_id = await ensure_led_widget_access(widget_oid, current_user)
     except HTTPException:
         raise
     except Exception as e:
@@ -668,6 +670,18 @@ async def add_device(device: DeviceCreate, current_user: dict = Depends(get_curr
         "timestamp": now.isoformat()
     }))
 
+    # 🆕 Send device registration email with credentials
+    user = await db.users.find_one({"_id": user_id})
+    if user and user.get("email"):
+        asyncio.create_task(asyncio.to_thread(
+            send_device_registered_email,
+            user["email"],
+            device.name,
+            str(result.inserted_id),
+            token
+        ))
+        logger.info(f"Device registration email queued for {user['email']}")
+
     return new_device_dict
 
 
@@ -675,7 +689,7 @@ async def add_device(device: DeviceCreate, current_user: dict = Depends(get_curr
 async def delete_device(device_id: str, current_user: dict = Depends(get_current_user)):
     user_id = safe_oid(current_user["id"])
     # Rule: .write (Delete own device)
-    device = await SecurityRules.verify_ownership(db.devices, device_id, user_id, "Device")
+    device = await SecurityRules.verify_ownership(db.devices, device_id, current_user, "Device")
     device_oid = device["_id"]
 
     await db.telemetry.delete_many({"device_id": device_oid})
@@ -805,6 +819,39 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
 
     payload = data.data or {}
 
+    # 🆕 Process critical alerts
+    if payload:
+        user_for_alert = None
+        # Low Battery Alert
+        if "battery" in payload:
+            try:
+                bat_val = float(payload["battery"])
+                if bat_val < 10:
+                    user_for_alert = await db.users.find_one({"_id": device["user_id"]})
+                    if user_for_alert and user_for_alert.get("email"):
+                        asyncio.create_task(asyncio.to_thread(
+                            send_user_alert_email,
+                            user_for_alert["email"],
+                            f"Low Battery: {device.get('name', 'Device')}",
+                            f"Warning: Device '{device.get('name', 'Device')}' reported low battery ({bat_val}%). Please recharge."
+                        ))
+            except Exception: pass
+            
+        # High Temp Alert
+        if "temperature" in payload:
+            try:
+                temp_val = float(payload["temperature"])
+                if temp_val > 70:
+                    if not user_for_alert: user_for_alert = await db.users.find_one({"_id": device["user_id"]})
+                    if user_for_alert and user_for_alert.get("email"):
+                        asyncio.create_task(asyncio.to_thread(
+                            send_user_alert_email,
+                            user_for_alert["email"],
+                            f"High Temp Alert: {device.get('name', 'Device')}",
+                            f"Alert: Device '{device.get('name', 'Device')}' reported high temperature ({temp_val}°C). Possible overheating."
+                        ))
+            except Exception: pass
+
     # Store telemetry (same logic as old /telemetry)
     telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
     if telemetry:
@@ -854,6 +901,21 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
             f"Device reconnected at {now.strftime('%I:%M %p')}",
             dev_oid,
         )
+        
+        # 🆕 Send device online email notification
+        user = await db.users.find_one({"_id": device["user_id"]})
+        if user and user.get("email"):
+            last_active_str = device.get("last_active").strftime("%Y-%m-%d %H:%M:%S UTC") if device.get("last_active") else None
+            asyncio.create_task(asyncio.to_thread(
+                send_device_status_email,
+                user["email"],
+                device.get("name", "Device"),
+                device_id,
+                "online",
+                now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                last_active_str
+            ))
+            logger.info(f"Device online email queued for {user['email']}")
 
     # Fetch latest state to return to device (allows device to sync state)
     updated_telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
@@ -1807,6 +1869,21 @@ async def auto_offline_checker():
                             f"Device last seen: {last_active.strftime('%I:%M %p') if last_active else 'Unknown'}\nTimeout: {OFFLINE_TIMEOUT} seconds",
                             device["_id"],
                         )
+                        
+                        # 🆕 Send device offline email notification
+                        user = await db.users.find_one({"_id": device["user_id"]})
+                        if user and user.get("email"):
+                            last_active_str = last_active.strftime("%Y-%m-%d %H:%M:%S UTC") if last_active else None
+                            asyncio.create_task(asyncio.to_thread(
+                                send_device_status_email,
+                                user["email"],
+                                device.get("name", "Device"),
+                                str(device["_id"]),
+                                "offline",
+                                now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                                last_active_str
+                            ))
+                            logger.info(f"Device offline email queued for {user['email']}")
                     
                     logger.debug(f"Device {device['_id']} set to offline")
 

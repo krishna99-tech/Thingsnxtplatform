@@ -92,3 +92,12 @@ class UserOut(BaseModel):
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
     notification_settings: Optional[Dict[str, Any]] = None
+
+
+# ===============================
+# 🚪 Logout Response Schema
+# ===============================
+class LogoutResponse(BaseModel):
+    message: str
+    tokens_deleted: int
+

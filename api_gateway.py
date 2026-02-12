@@ -101,7 +101,8 @@ class RateLimiter:
         self.requests[client_ip].append(now)
 
 # Initialize global rate limiter (e.g., 100 requests per minute)
-limiter = RateLimiter(requests_limit=100, time_window=60, excluded_paths=["/health", "/docs", "/redoc"])
+# Exclude /logout to prevent users from being unable to logout due to rate limiting
+limiter = RateLimiter(requests_limit=100, time_window=60, excluded_paths=["/health", "/docs", "/redoc", "/logout"])
 
 # Create the main API Gateway router with global rate limiting
 api_gateway = APIRouter(dependencies=[Depends(limiter)])

@@ -248,6 +248,110 @@ def send_user_alert_email(email: str, subject: str, message: str) -> bool:
         logger.error(f"Failed to send alert email to {email}: {e}")
         return False
 
+def send_device_status_email(
+    email: str,
+    device_name: str,
+    device_id: str,
+    status: str,
+    timestamp: str,
+    last_active: str = None
+) -> bool:
+    """Sends a device status change notification (online/offline)."""
+    try:
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
+        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
+        
+        context = {
+            "device_name": device_name,
+            "device_id": device_id,
+            "status": status,
+            "timestamp": timestamp,
+            "last_active": last_active,
+            "app_name": app_name,
+            "FRONTEND_URL": frontend_url,
+            "year": datetime.now().year,
+        }
+        
+        status_emoji = "🟢" if status == "online" else "🔴"
+        subject = f"{status_emoji} Device {status.upper()}: {device_name}"
+        
+        template = jinja_env.get_template("email_device_status.html")
+        html_body = template.render(context)
+        
+        text_body = f"""
+Device Status Update
+
+Device: {device_name}
+ID: {device_id}
+Status: {status.upper()}
+Timestamp: {timestamp}
+{f'Last Active: {last_active}' if last_active else ''}
+
+View device details: {frontend_url}/devices/{device_id}
+
+--
+{app_name} IoT Platform
+"""
+        
+        return send_email(email, subject, html_body, text_body)
+    except Exception as e:
+        logger.error(f"Failed to send device status email to {email}: {e}")
+        return False
+
+def send_device_registered_email(
+    email: str,
+    device_name: str,
+    device_id: str,
+    device_token: str
+) -> bool:
+    """Sends a device registration confirmation with credentials."""
+    try:
+        app_name = os.getenv("APP_NAME", "ThingsNXT")
+        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
+        
+        context = {
+            "device_name": device_name,
+            "device_id": device_id,
+            "device_token": device_token,
+            "app_name": app_name,
+            "FRONTEND_URL": frontend_url,
+            "year": datetime.now().year,
+        }
+        
+        subject = f"🎉 Device Registered: {device_name}"
+        
+        template = jinja_env.get_template("email_device_registered.html")
+        html_body = template.render(context)
+        
+        text_body = f"""
+Device Successfully Registered!
+
+Your new IoT device has been added to your {app_name} account.
+
+Device Name: {device_name}
+Device ID: {device_id}
+Device Token: {device_token}
+
+⚠️ SECURITY NOTICE:
+Keep your device token secure! This is the only time it will be sent via email.
+
+Next Steps:
+1. Configure your device with the ID and Token
+2. Connect your device to the network
+3. Start sending telemetry data
+
+View device: {frontend_url}/devices/{device_id}
+Documentation: {frontend_url}/docs/esp32-setup
+
+--
+{app_name} IoT Platform
+"""
+        
+        return send_email(email, subject, html_body, text_body)
+    except Exception as e:
+        logger.error(f"Failed to send device registered email to {email}: {e}")
+        return False
+
 # ============================================================
 # 🧩 MongoDB Helper
 # ============================================================

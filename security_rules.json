@@ -1,56 +1,56 @@
 {
   "users": {
     "$user_id": {
-      ".read": "auth.uid == data.id or auth.uid == data._id",
-      ".write": "auth.uid == data.id or auth.uid == data._id"
+      ".read": "auth.uid == data.id or auth.uid == data._id or auth.access_right == 'Supreme'",
+      ".write": "auth.uid == data.id or auth.uid == data._id or auth.access_right == 'Supreme'"
     }
   },
   "devices": {
     "$device_id": {
-      ".read": "auth.uid == data.user_id",
-      ".write": "auth.uid == data.user_id"
+      ".read": "auth.uid == data.user_id or auth.access_right == 'Supreme' or auth.access_right == 'Elevated'",
+      ".write": "auth.uid == data.user_id or auth.access_right == 'Supreme'"
     }
   },
   "dashboards": {
     "$dashboard_id": {
-      ".read": "auth.uid == data.user_id",
-      ".write": "auth.uid == data.user_id"
+      ".read": "auth.uid == data.user_id or auth.access_right == 'Supreme' or auth.access_right == 'Elevated'",
+      ".write": "auth.uid == data.user_id or auth.access_right == 'Supreme'"
     }
   },
   "widgets": {
     "$widget_id": {
-      ".read": "auth.uid == root.dashboards[data.dashboard_id].user_id",
-      ".write": "auth.uid == root.dashboards[data.dashboard_id].user_id"
+      ".read": "auth.uid == root.dashboards[data.dashboard_id].user_id or auth.access_right == 'Supreme' or auth.access_right == 'Elevated'",
+      ".write": "auth.uid == root.dashboards[data.dashboard_id].user_id or auth.access_right == 'Supreme'"
     }
   },
   "telemetry": {
     "$telemetry_id": {
-      ".read": "auth.uid == root.devices[data.device_id].user_id",
-      ".write": "root.devices[data.device_id].device_token == device_token"
+      ".read": "auth.uid == root.devices[data.device_id].user_id or auth.access_right == 'Supreme' or auth.access_right == 'Elevated'",
+      ".write": "root.devices[data.device_id].device_token == device_token or auth.access_right == 'Supreme'"
     }
   },
   "notifications": {
     "$notification_id": {
-      ".read": "auth.uid == data.user_id",
-      ".write": "auth.uid == data.user_id"
+      ".read": "auth.uid == data.user_id or auth.access_right == 'Supreme'",
+      ".write": "auth.uid == data.user_id or auth.access_right == 'Supreme'"
     }
   },
   "webhooks": {
     "$webhook_id": {
-      ".read": "auth.uid == data.user_id",
-      ".write": "auth.uid == data.user_id"
+      ".read": "auth.uid == data.user_id or auth.access_right == 'Supreme'",
+      ".write": "auth.uid == data.user_id or auth.access_right == 'Supreme'"
     }
   },
   "led_schedules": {
     "$schedule_id": {
-      ".read": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id",
-      ".write": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id"
+      ".read": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id or auth.access_right == 'Supreme'",
+      ".write": "auth.uid == root.dashboards[root.widgets[data.widget_id].dashboard_id].user_id or auth.access_right == 'Supreme'"
     }
   },
   "refresh_tokens": {
     "$token_id": {
-      ".read": "auth.uid == data.user_id",
-      ".write": "auth.uid == data.user_id"
+      ".read": "auth.uid == data.user_id or auth.access_right == 'Supreme'",
+      ".write": "auth.uid == data.user_id or auth.access_right == 'Supreme'"
     }
   },
   "reset_tokens": {
