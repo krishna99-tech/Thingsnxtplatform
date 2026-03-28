@@ -61,6 +61,11 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD","ybkcseepobjiwfpr")
 EMAIL_FROM = os.getenv("EMAIL_FROM") or EMAIL_USER
 EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "ThingsNXT")
 
+# Application context
+APP_NAME = os.getenv("APP_NAME", "ThingsNXT")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
+APP_SCHEME = os.getenv("APP_SCHEME", "thingsnxt")
+
 pwd_context = CryptContext(schemes=[os.getenv("PWD_SCHEME", "bcrypt")], deprecated="auto")
 
 if not SECRET_KEY:
@@ -139,20 +144,16 @@ def send_reset_email(email: str, token: str) -> bool:
     """Sends a password reset email using Jinja2 templates."""
     try:
         # Standard configuration
-        app_name = os.getenv("APP_NAME", "ThingsNXT")
-        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        app_scheme = os.getenv("APP_SCHEME", "ThingsNXT")
-
         context = {
             "token": token,
-            "app_name": app_name,
-            "FRONTEND_URL": frontend_url,
-            "web_reset_link": f"{frontend_url}/reset-password?token={token}",
-            "app_reset_link": f"{app_scheme}://reset-password?token={token}" if app_scheme else None,
-            "copyright_text": f"© {datetime.now().year} {app_name}. All rights reserved.",
+            "app_name": APP_NAME,
+            "FRONTEND_URL": FRONTEND_URL,
+            "web_reset_link": f"{FRONTEND_URL}/reset-password?token={token}",
+            "app_reset_link": f"{APP_SCHEME}://reset-password?token={token}" if APP_SCHEME else None,
+            "copyright_text": f"© {datetime.now().year} {APP_NAME}. All rights reserved.",
         }
 
-        subject = f"{app_name} — Password Reset Request"
+        subject = f"{APP_NAME} — Password Reset Request"
 
         try:
             html_template = jinja_env.get_template("email_reset.html")
@@ -202,18 +203,15 @@ def send_broadcast_email(to_email: str, subject: str, message_content: str) -> b
 def send_welcome_email(email: str, username: str) -> bool:
     """Sends a welcome email to a newly registered user."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT")
-        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        
         context = {
             "username": username,
-            "app_name": app_name,
-            "FRONTEND_URL": frontend_url,
-            "app_home_link": f"{app_scheme}://home" if app_scheme else None,
+            "app_name": APP_NAME,
+            "FRONTEND_URL": FRONTEND_URL,
+            "app_home_link": f"{APP_SCHEME}://home" if APP_SCHEME else None,
             "year": datetime.now().year,
         }
         
-        subject = f"Welcome to {app_name}!"
+        subject = f"Welcome to {APP_NAME}!"
         template = jinja_env.get_template("email_welcome.html")
         html_body = template.render(context)
         text_body = f"Welcome to {app_name}, {username}!\nYour account is ready."
@@ -226,16 +224,12 @@ def send_welcome_email(email: str, username: str) -> bool:
 def send_user_alert_email(email: str, subject: str, message: str) -> bool:
     """Sends a system alert or error notification to a specific user."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT")
-        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        app_scheme = os.getenv("APP_SCHEME", "ThingsNXT")
-        
         context = {
             "subject": subject,
             "message": message,
-            "app_name": app_name,
-            "FRONTEND_URL": frontend_url,
-            "app_login_link": f"{app_scheme}://login" if app_scheme else None,
+            "app_name": APP_NAME,
+            "FRONTEND_URL": FRONTEND_URL,
+            "app_login_link": f"{APP_SCHEME}://login" if APP_SCHEME else None,
             "year": datetime.now().year,
         }
         
@@ -259,18 +253,15 @@ def send_device_status_email(
 ) -> bool:
     """Sends a device status change notification (online/offline)."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT")
-        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        
         context = {
             "device_name": device_name,
             "device_id": device_id,
             "status": status,
             "timestamp": timestamp,
             "last_active": last_active,
-            "app_name": app_name,
-            "FRONTEND_URL": frontend_url,
-            "app_device_link": f"{app_scheme}://device/{device_id}" if app_scheme else None,
+            "app_name": APP_NAME,
+            "FRONTEND_URL": FRONTEND_URL,
+            "app_device_link": f"{APP_SCHEME}://device/{device_id}" if APP_SCHEME else None,
             "year": datetime.now().year,
         }
         

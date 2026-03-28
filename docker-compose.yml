@@ -34,8 +34,9 @@ services:
       - EMAIL_USER=${EMAIL_USER:-}
       - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
-      - APP_NAME=${APP_NAME:-ThingsNXT IoT Platform}
+      - APP_NAME=${APP_NAME:-ThingsNXT}
       - FRONTEND_URL=${FRONTEND_URL:-https://thingsnxt.vercel.app}
+      - APP_SCHEME=${APP_SCHEME:-thingsnxt}
       - COMPANY_NAME=${COMPANY_NAME:-ThingsNXT}
       - COPYRIGHT_TEXT=${COPYRIGHT_TEXT:-© 2026 ThingsNXT. All rights reserved.}
       - EMAIL_FROM_NAME=${EMAIL_FROM_NAME:-ThingsNXT Support}
