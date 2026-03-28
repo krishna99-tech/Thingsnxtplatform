@@ -209,6 +209,7 @@ def send_welcome_email(email: str, username: str) -> bool:
             "username": username,
             "app_name": app_name,
             "FRONTEND_URL": frontend_url,
+            "app_home_link": f"{app_scheme}://home" if app_scheme else None,
             "year": datetime.now().year,
         }
         
@@ -269,6 +270,7 @@ def send_device_status_email(
             "last_active": last_active,
             "app_name": app_name,
             "FRONTEND_URL": frontend_url,
+            "app_device_link": f"{app_scheme}://device/{device_id}" if app_scheme else None,
             "year": datetime.now().year,
         }
         
@@ -315,6 +317,7 @@ def send_device_registered_email(
             "device_token": device_token,
             "app_name": app_name,
             "FRONTEND_URL": frontend_url,
+            "app_device_link": f"{app_scheme}://device/{device_id}" if app_scheme else None,
             "year": datetime.now().year,
         }
         

@@ -100,4 +100,6 @@ class UserOut(BaseModel):
 class LogoutResponse(BaseModel):
     message: str
     tokens_deleted: int
+    # True when the server had no refresh tokens left (repeat /logout is a no-op server-side).
+    already_logged_out: bool = False
 

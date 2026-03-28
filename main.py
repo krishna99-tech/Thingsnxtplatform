@@ -10,6 +10,14 @@ from db import init_db, db
 # Import API Gateway and Background Tasks
 from api_gateway import api_gateway
 from device_routes import led_schedule_worker, auto_offline_checker
+from mqtt_service import MQTT_ENABLED, mqtt_bridge_worker
+from kafka_service import (
+    KAFKA_ENABLED,
+    start_kafka_producer,
+    stop_kafka_producer,
+    start_kafka_relay_background,
+    stop_kafka_relay,
+)
 
 from admin_routes import router as admin_router
 from utils import get_password_hash
@@ -47,6 +55,19 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(led_schedule_worker())
         logger.info("✅ LED schedule worker started")
 
+        if MQTT_ENABLED:
+            asyncio.create_task(mqtt_bridge_worker())
+            logger.info("✅ MQTT bridge worker started")
+        else:
+            logger.info("ℹ️ MQTT bridge disabled (set MQTT_ENABLED=true to enable)")
+
+        await start_kafka_producer()
+        if KAFKA_ENABLED:
+            start_kafka_relay_background()
+            logger.info("✅ Kafka producer + UI relay started (or will connect lazily)")
+        else:
+            logger.info("ℹ️ Kafka disabled (KAFKA_ENABLED=false)")
+
         # Seed Default Admin
         admin_user = os.getenv("DEFAULT_ADMIN_USER", "admin")
         admin_pass = os.getenv("DEFAULT_ADMIN_PASS", "admin123")
@@ -78,7 +99,8 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("🛑 Shutting down ThingsNXT IoT Platform Backend...")
-    # Any cleanup tasks can be added here
+    await stop_kafka_relay()
+    await stop_kafka_producer()
     logger.info("✅ Shutdown complete")
 
 

@@ -91,6 +91,9 @@ async def init_db():
         await db.notifications.create_index([("user_id", 1), ("read", 1)])
         await db.notifications.create_index("created_at")
         logger.debug("✅ Notification indexes created")
+
+        await db.platform_settings.create_index("_id")
+        logger.debug("✅ Platform settings collection ready")
         
         logger.info("✅ All MongoDB indexes initialized successfully")
     except Exception as e:

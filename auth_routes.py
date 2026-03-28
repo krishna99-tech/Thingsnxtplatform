@@ -194,25 +194,32 @@ async def login(user: UserLogin):
 @router.post("/logout", response_model=LogoutResponse)
 async def logout(current_user: dict = Depends(get_current_user)):
     """
-    Logout the current user by deleting all their refresh tokens.
-    This endpoint is idempotent - calling it multiple times is safe.
+    Revoke refresh tokens for the current user (requires a valid access token).
+    Idempotent: repeat calls return 200 with already_logged_out=True when nothing was left to revoke.
     """
     result = await db.refresh_tokens.delete_many({"user_id": ObjectId(current_user["id"])})
-    
-    # Return success regardless of whether tokens were found
-    # This makes the endpoint idempotent
+
     if result.deleted_count > 0:
-        logger.info(f"User {current_user.get('username', current_user.get('email'))} logged out successfully. Deleted {result.deleted_count} token(s).")
+        logger.info(
+            "User %s logged out; revoked %s refresh token(s).",
+            current_user.get("username", current_user.get("email")),
+            result.deleted_count,
+        )
         return {
             "message": "Logged out successfully",
-            "tokens_deleted": result.deleted_count
+            "tokens_deleted": result.deleted_count,
+            "already_logged_out": False,
         }
-    else:
-        logger.info(f"User {current_user.get('username', current_user.get('email'))} logout called but no tokens found (already logged out).")
-        return {
-            "message": "Already logged out",
-            "tokens_deleted": 0
-        }
+
+    logger.info(
+        "User %s logout: no refresh tokens to revoke (session already cleared server-side).",
+        current_user.get("username", current_user.get("email")),
+    )
+    return {
+        "message": "Already logged out",
+        "tokens_deleted": 0,
+        "already_logged_out": True,
+    }
 
 
 # ===============================================

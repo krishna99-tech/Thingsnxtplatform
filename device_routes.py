@@ -442,6 +442,13 @@ async def apply_led_state(device_id: ObjectId, state: bool, virtual_pin: Optiona
             },
         )
 
+    try:
+        from mqtt_service import publish_led_command
+
+        await publish_led_command(str(device_id), bool(state), virtual_pin)
+    except Exception as exc:
+        logger.debug("MQTT command publish skipped: %s", exc)
+
 
 async def ensure_led_widget_access(widget_oid: ObjectId, auth_user: Any):
     """Validate widget ownership and LED requirements."""
@@ -770,46 +777,42 @@ async def bulk_update_device_status(
 # ============================================================
 # 📡 V2 TELEMETRY ENDPOINTS (for ESP32 and future devices)
 # ============================================================
-@router.post("/devices/{device_id}/telemetry", tags=["Telemetry V2"])
-async def push_telemetry_v2(device_id: str, data: TelemetryData):
+async def ingest_device_telemetry(
+    device_id: str, data: TelemetryData, *, ingest_source: str = "http"
+) -> dict:
     """
-    New V2 endpoint where device_id is in the path, esp32-friendly.
-    Accepts: TelemetryData with optional device_token for auth.
+    Shared ingestion for HTTP POST /devices/{id}/telemetry and MQTT uplink.
+    Validates token and rules, persists telemetry (+ IoT derived metrics), Kafka, WebSocket.
     """
-    # Validate device existence
     dev_oid = safe_oid(device_id)
     if not dev_oid:
         raise HTTPException(status_code=400, detail="Invalid device ID")
     device = await db.devices.find_one({"_id": dev_oid})
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
-    # Validate device_token if provided
     if not data.device_token or device.get("device_token") != data.device_token:
         raise HTTPException(status_code=403, detail="Invalid device_token for device")
 
-    # Validate telemetry write rule using rules engine
     device_dict = doc_to_dict(device)
     telemetry_context = {
         "device_id": str(device["_id"]),
         "device_token": data.device_token,
         **device_dict
     }
-    
+
     is_allowed = await rules_engine.validate_rule(
-        "telemetry", 
-        ".write", 
-        device_dict.get("user_id"), 
+        "telemetry",
+        ".write",
+        device_dict.get("user_id"),
         telemetry_context,
-        {"device_token": data.device_token}
+        {"device_token": data.device_token},
     )
     if not is_allowed:
         raise HTTPException(status_code=403, detail="Access denied by security rules")
 
     user_id = str(device.get("user_id", ""))
-    # Check if device was previously offline (for notification)
     was_offline = device.get("status") != "online"
-    
-    # Check cooldown for notification
+
     now = datetime.utcnow()
     should_notify = False
     if was_offline:
@@ -818,54 +821,79 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
             should_notify = True
 
     payload = data.data or {}
+    payload_clean = {
+        k: v for k, v in payload.items() if k not in ("_iot_derived", "_iot_history")
+    }
 
-    # 🆕 Process critical alerts
-    if payload:
+    if payload_clean:
         user_for_alert = None
-        # Low Battery Alert
-        if "battery" in payload:
+        if "battery" in payload_clean:
             try:
-                bat_val = float(payload["battery"])
+                bat_val = float(payload_clean["battery"])
                 if bat_val < 10:
                     user_for_alert = await db.users.find_one({"_id": device["user_id"]})
                     if user_for_alert and user_for_alert.get("email"):
-                        asyncio.create_task(asyncio.to_thread(
-                            send_user_alert_email,
-                            user_for_alert["email"],
-                            f"Low Battery: {device.get('name', 'Device')}",
-                            f"Warning: Device '{device.get('name', 'Device')}' reported low battery ({bat_val}%). Please recharge."
-                        ))
-            except Exception: pass
-            
-        # High Temp Alert
-        if "temperature" in payload:
-            try:
-                temp_val = float(payload["temperature"])
-                if temp_val > 70:
-                    if not user_for_alert: user_for_alert = await db.users.find_one({"_id": device["user_id"]})
-                    if user_for_alert and user_for_alert.get("email"):
-                        asyncio.create_task(asyncio.to_thread(
-                            send_user_alert_email,
-                            user_for_alert["email"],
-                            f"High Temp Alert: {device.get('name', 'Device')}",
-                            f"Alert: Device '{device.get('name', 'Device')}' reported high temperature ({temp_val}°C). Possible overheating."
-                        ))
-            except Exception: pass
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                send_user_alert_email,
+                                user_for_alert["email"],
+                                f"Low Battery: {device.get('name', 'Device')}",
+                                f"Warning: Device '{device.get('name', 'Device')}' reported low battery ({bat_val}%). Please recharge.",
+                            )
+                        )
+            except Exception:
+                pass
 
-    # Store telemetry (same logic as old /telemetry)
+        if "temperature" in payload_clean:
+            try:
+                temp_val = float(payload_clean["temperature"])
+                if temp_val > 70:
+                    if not user_for_alert:
+                        user_for_alert = await db.users.find_one({"_id": device["user_id"]})
+                    if user_for_alert and user_for_alert.get("email"):
+                        asyncio.create_task(
+                            asyncio.to_thread(
+                                send_user_alert_email,
+                                user_for_alert["email"],
+                                f"High Temp Alert: {device.get('name', 'Device')}",
+                                f"Alert: Device '{device.get('name', 'Device')}' reported high temperature ({temp_val}°C). Possible overheating.",
+                            )
+                        )
+            except Exception:
+                pass
+
     telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
+    prev = dict(telemetry.get("value") or {}) if telemetry else {}
+    from iot_algorithms import compute_derived_telemetry
+
+    derived = compute_derived_telemetry(payload_clean, prev)
+    hist_store = derived.pop("_history_tail", {})
+    merged = {**prev, **payload_clean, "_iot_derived": derived, "_iot_history": hist_store}
+
     if telemetry:
-        existing = telemetry.get("value", {})
-        existing.update(payload)
         await db.telemetry.update_one(
             {"_id": telemetry["_id"]},
-            {"$set": {"value": existing, "timestamp": now}},
+            {"$set": {"value": merged, "timestamp": now}},
         )
     else:
         await db.telemetry.insert_one(
-            {"device_id": dev_oid, "key": "telemetry_json", "value": payload, "timestamp": now}
+            {"device_id": dev_oid, "key": "telemetry_json", "value": merged, "timestamp": now}
         )
-    # Update device status
+
+    try:
+        from kafka_service import schedule_publish_telemetry_enriched
+
+        schedule_publish_telemetry_enriched(
+            user_id=user_id,
+            device_id=device_id,
+            patch=payload_clean,
+            derived={k: v for k, v in derived.items()},
+            ingest_source=ingest_source,
+            timestamp_iso=now.isoformat() + "Z",
+        )
+    except Exception as exc:
+        logger.debug("Kafka scheduling skipped: %s", exc)
+
     update_fields = {"status": "online", "last_active": now}
     if should_notify:
         update_fields["last_status_notification"] = now
@@ -875,23 +903,26 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
         {"$set": update_fields},
     )
 
-    # Broadcast status update via WebSocket (Ensure frontend knows device is online)
-    await manager.broadcast(user_id, {
-        "type": "status_update",
-        "device_id": device_id,
-        "status": "online",
-        "timestamp": now.isoformat(),
-    })
+    await manager.broadcast(
+        user_id,
+        {
+            "type": "status_update",
+            "device_id": device_id,
+            "status": "online",
+            "timestamp": now.isoformat(),
+        },
+    )
 
-    # Broadcast via websocket
-    await manager.broadcast(user_id, {
-        "type": "telemetry_update",
-        "device_id": device_id,
-        "timestamp": now.isoformat(),
-        "data": payload,
-    })
+    await manager.broadcast(
+        user_id,
+        {
+            "type": "telemetry_update",
+            "device_id": device_id,
+            "timestamp": now.isoformat(),
+            "data": payload_clean,
+        },
+    )
 
-    # Notify if device came back online
     if should_notify:
         await create_notification(
             device["user_id"],
@@ -901,27 +932,47 @@ async def push_telemetry_v2(device_id: str, data: TelemetryData):
             f"Device reconnected at {now.strftime('%I:%M %p')}",
             dev_oid,
         )
-        
-        # 🆕 Send device online email notification
+
         user = await db.users.find_one({"_id": device["user_id"]})
         if user and user.get("email"):
-            last_active_str = device.get("last_active").strftime("%Y-%m-%d %H:%M:%S UTC") if device.get("last_active") else None
-            asyncio.create_task(asyncio.to_thread(
-                send_device_status_email,
-                user["email"],
-                device.get("name", "Device"),
-                device_id,
-                "online",
-                now.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                last_active_str
-            ))
-            logger.info(f"Device online email queued for {user['email']}")
+            last_active_str = (
+                device.get("last_active").strftime("%Y-%m-%d %H:%M:%S UTC")
+                if device.get("last_active")
+                else None
+            )
+            asyncio.create_task(
+                asyncio.to_thread(
+                    send_device_status_email,
+                    user["email"],
+                    device.get("name", "Device"),
+                    device_id,
+                    "online",
+                    now.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                    last_active_str,
+                )
+            )
+            logger.info("Device online email queued for %s", user["email"])
 
-    # Fetch latest state to return to device (allows device to sync state)
     updated_telemetry = await db.telemetry.find_one({"device_id": dev_oid, "key": "telemetry_json"})
-    current_data = updated_telemetry.get("value", {}) if updated_telemetry else payload
+    current_data = updated_telemetry.get("value", {}) if updated_telemetry else merged
 
-    return {"message": "ok", "device_id": device_id, "data": current_data, "timestamp": now.isoformat()}
+    return {
+        "message": "ok",
+        "device_id": device_id,
+        "data": current_data,
+        "timestamp": now.isoformat(),
+        "iot_derived": derived,
+    }
+
+
+@router.post("/devices/{device_id}/telemetry", tags=["Telemetry V2"])
+async def push_telemetry_v2(device_id: str, data: TelemetryData):
+    """
+    New V2 endpoint where device_id is in the path, esp32-friendly.
+    Accepts: TelemetryData with optional device_token for auth.
+    Same payload as MQTT topic .../device/{device_id}/telemetry (see MQTT docs).
+    """
+    return await ingest_device_telemetry(device_id, data)
 
 # Legacy endpoint remains for backward compatibility
 @router.post("/telemetry")

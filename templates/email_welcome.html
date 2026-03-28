@@ -122,8 +122,11 @@
                     <br><br>
                     Start exploring your dashboard to monitor your fleet and manage your IoT deployments in real-time.
                 </div>
-                <div style="text-align: center;">
+                <div style="text-align: center; gap: 12px;">
                     <a href="{{ FRONTEND_URL }}/dashboard" class="button">Go to Dashboard</a>
+                    {% if app_home_link %}
+                    <a href="{{ app_home_link }}" class="button" style="background-color: #64748b; margin-top: 10px;">Open in App</a>
+                    {% endif %}
                 </div>
                 
                 <p style="text-align: center; margin-top: 30px; font-size: 14px; color: #64748b;">

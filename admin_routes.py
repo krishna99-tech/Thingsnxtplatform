@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, status, BackgroundTasks, Query
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from datetime import datetime
@@ -7,7 +7,12 @@ import secrets
 
 from db import db, doc_to_dict
 from auth_routes import get_current_user
-from utils import send_email, get_password_hash, send_broadcast_email, send_user_alert_email # Reusing existing utils
+from utils import (
+    send_email,
+    get_password_hash,
+    send_broadcast_email,
+    send_user_alert_email,
+)  # Reusing existing utils
 from pydantic import BaseModel, EmailStr
 import json
 import os
@@ -125,6 +130,53 @@ class BroadcastRequest(BaseModel):
     subject: str
     message: str
     recipients: Optional[List[str]] = None
+
+
+class EmailTestRequest(BaseModel):
+    to_email: EmailStr
+
+
+PLATFORM_SETTINGS_ID = "global"
+
+
+def _default_platform_settings_doc() -> Dict[str, Any]:
+    return {
+        "_id": PLATFORM_SETTINGS_ID,
+        "branding": {
+            "app_display_name": os.getenv("APP_NAME", "ThingsNXT"),
+            "company_name": os.getenv("COMPANY_NAME", "ThingsNXT"),
+            "copyright_text": os.getenv("COPYRIGHT_TEXT", ""),
+            "support_email": os.getenv("EMAIL_FROM", "") or os.getenv("SUPPORT_EMAIL", ""),
+            "frontend_url": os.getenv("FRONTEND_URL", ""),
+        },
+        "mobile_app": {
+            "maintenance_mode": False,
+            "maintenance_message": "",
+            "maintenance_blocking": False,
+            "min_app_version": "",
+            "feature_flags": {
+                "connected_apps": True,
+                "webhooks": True,
+                "kafka_pipeline_card": True,
+            },
+        },
+        "email_copy": {
+            "welcome_footer_note": "",
+            "alert_signature": "ThingsNXT Platform",
+        },
+    }
+
+
+def _deep_merge_dict(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(base)
+    for k, v in (patch or {}).items():
+        if k.startswith("$") or k == "_id":
+            continue
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_dict(out[k], v)
+        else:
+            out[k] = v
+    return out
 
 # ============================================================
 # 🛠️ Helpers
@@ -378,8 +430,6 @@ async def create_device_admin(payload: DeviceCreateAdmin, current_user: dict = D
     device_dict["owner_name"] = user.get("username")
     device_dict["owner_email"] = user.get("email")
     
-    return device_dict
-
     return device_dict
 
 @router.patch("/devices/{device_id}/transfer", response_model=DeviceOutAdmin)
@@ -721,12 +771,86 @@ async def update_security_rules(rules: dict, current_user: dict = Depends(verify
 
 
 # ============================================================
+# ⚙️ Platform settings (mobile app + branding; public read via GET /app/config)
+# ============================================================
+@router.get("/platform-settings")
+async def admin_get_platform_settings(current_user: dict = Depends(verify_admin)):
+    doc = await db.platform_settings.find_one({"_id": PLATFORM_SETTINGS_ID})
+    if not doc:
+        return _default_platform_settings_doc()
+    return doc_to_dict(doc)
+
+
+@router.put("/platform-settings")
+async def admin_put_platform_settings(
+    payload: Dict[str, Any] = Body(...),
+    current_user: dict = Depends(verify_admin),
+):
+    """Replace-merge top-level sections: branding, mobile_app, email_copy."""
+    existing = await db.platform_settings.find_one({"_id": PLATFORM_SETTINGS_ID})
+    base = doc_to_dict(existing) if existing else _default_platform_settings_doc()
+    merged = _deep_merge_dict(base, payload)
+    merged["_id"] = PLATFORM_SETTINGS_ID
+    merged["updated_at"] = datetime.utcnow()
+    await db.platform_settings.replace_one(
+        {"_id": PLATFORM_SETTINGS_ID}, merged, upsert=True
+    )
+    await db.admin_activity.insert_one(
+        {
+            "action": "update_platform_settings",
+            "admin_id": ObjectId(current_user["id"]),
+            "timestamp": datetime.utcnow(),
+        }
+    )
+    return doc_to_dict(merged)
+
+
+# ============================================================
+# ✉️ Email diagnostics (admin)
+# ============================================================
+@router.get("/email/status")
+async def admin_email_status(current_user: dict = Depends(verify_admin)):
+    """Whether SMTP env is present (never returns secrets)."""
+    u = os.getenv("EMAIL_USER", "").strip()
+    p = os.getenv("EMAIL_PASSWORD", "").strip()
+    return {
+        "smtp_configured": bool(u and p),
+        "host": os.getenv("EMAIL_HOST", "smtp.gmail.com"),
+        "port": int(os.getenv("EMAIL_PORT", "587")),
+        "from_configured": bool(os.getenv("EMAIL_FROM") or u),
+        "app_name": os.getenv("APP_NAME", "ThingsNXT"),
+    }
+
+
+@router.post("/email/test")
+async def admin_email_test(
+    payload: EmailTestRequest,
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(verify_admin),
+):
+    """Queue a simple message to verify SMTP from the server."""
+    background_tasks.add_task(
+        send_email,
+        payload.to_email,
+        "ThingsNXT — Admin SMTP test",
+        "<p><strong>ThingsNXT</strong> SMTP test succeeded.</p><p>This message was sent from the admin console.</p>",
+        "ThingsNXT SMTP test succeeded. This message was sent from the admin console.",
+    )
+    await db.admin_activity.insert_one(
+        {
+            "action": "email_test",
+            "admin_id": ObjectId(current_user["id"]),
+            "recipient": payload.to_email,
+            "timestamp": datetime.utcnow(),
+        }
+    )
+    return {"message": f"Test email queued for {payload.to_email}"}
+
+
+# ============================================================
 # 👤 USER DETAIL ENDPOINT
 # ============================================================
-# ============================================================
-# 👤 USER DETAIL ENDPOINT
-# ============================================================
-@router.get("/users/{user_id}", response_model=UserOutAdmin)
+@router.get("/users/{user_id}")
 async def get_user_detail(user_id: str, current_user: dict = Depends(verify_admin)):
     """Get detailed information about a specific user including their devices and activity."""
     if not ObjectId.is_valid(user_id):

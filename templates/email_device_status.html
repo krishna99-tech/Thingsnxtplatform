@@ -190,6 +190,9 @@
 
                 <div style="text-align: center; margin-top: 30px;">
                     <a href="{{ FRONTEND_URL }}/devices/{{ device_id }}" class="button">View Device Details</a>
+                    {% if app_device_link %}
+                    <a href="{{ app_device_link }}" class="button" style="background-color: #64748b; margin-top: 10px;">Open in Mobile App</a>
+                    {% endif %}
                 </div>
 
                 <p style="font-size: 14px; color: #64748b; margin-top: 30px; text-align: center;">

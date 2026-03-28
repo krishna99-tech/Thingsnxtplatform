@@ -13,6 +13,8 @@ from auth_routes import router as auth_router
 from device_routes import router as device_router
 from websocket_routes import router as websocket_router
 from events import router as events_router
+from integrations_kafka_routes import router as kafka_integrations_router
+from app_config_routes import router as app_config_router
 
 # Import dependencies for health check
 from db import db
@@ -39,13 +41,28 @@ class RateLimiter:
         self.requests = defaultdict(list)  # In-memory fallback
         self.use_redis = True
 
+    def _is_rate_limit_exempt(self, raw_path: str) -> bool:
+        """Match excluded routes in a path-shape tolerant way (prefix mounts, case, trailing slashes)."""
+        if not raw_path:
+            return False
+        path = (raw_path.rstrip("/") or "/").lower()
+        if path in ("/", "/health", "/logout"):
+            return True
+        if any(path.startswith(p.lower().rstrip("/")) for p in self.excluded_paths):
+            return True
+        if path.endswith("/logout"):
+            return True
+        if path.startswith("/integrations/kafka/live"):
+            return True
+        return False
+
     async def __call__(self, conn: HTTPConnection):
         # 1. Exclude WebSockets (connection establishment)
         if conn.scope["type"] == "websocket":
             return
 
-        # 2. Exclude specific paths
-        if any(conn.url.path.startswith(p) for p in self.excluded_paths):
+        # 2. Exclude specific paths (logout must never be throttled — clients often retry in parallel)
+        if self._is_rate_limit_exempt(conn.url.path):
             return
 
         # Identify client by IP address
@@ -115,6 +132,8 @@ api_gateway.include_router(auth_router)
 api_gateway.include_router(device_router)
 api_gateway.include_router(websocket_router)
 api_gateway.include_router(events_router)
+api_gateway.include_router(kafka_integrations_router)
+api_gateway.include_router(app_config_router)
 
 
 # ============================================================
@@ -139,10 +158,26 @@ async def health_check():
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         db_status = "disconnected"
-    
+
+    try:
+        from mqtt_service import mqtt_config_summary
+
+        mqtt_info = mqtt_config_summary()
+    except Exception:
+        mqtt_info = {"enabled": False, "error": "mqtt_service unavailable"}
+
+    try:
+        from kafka_service import kafka_stats
+
+        kafka_info = kafka_stats()
+    except Exception:
+        kafka_info = {"enabled": False, "error": "kafka_service unavailable"}
+
     return {
         "status": "healthy" if db_status == "connected" else "degraded",
         "timestamp": datetime.utcnow().isoformat(),
         "database": db_status,
         "websocket_connections": manager.get_connection_count(),
+        "mqtt": mqtt_info,
+        "kafka": kafka_info,
     }
