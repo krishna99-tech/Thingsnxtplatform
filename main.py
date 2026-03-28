@@ -137,6 +137,5 @@ app.include_router(admin_router)
 
 if __name__ == "__main__":
     import uvicorn
-    # Changing host to 127.0.0.1 for better Windows compatibility (resolves WinError 10022)
-    # The frontend is configured to talk to localhost:8000
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    # Using 0.0.0.0 to allow access from other devices (like mobile apps) on the same network
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
