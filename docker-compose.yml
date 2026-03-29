@@ -1,6 +1,7 @@
 services:
   # FastAPI Backend Service
   api:
+    image: electrogadgedc/thingsnxt-backend:latest
     build:
       context: .
       dockerfile: Dockerfile

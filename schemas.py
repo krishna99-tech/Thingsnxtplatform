@@ -92,6 +92,7 @@ class UserOut(BaseModel):
     created_at: Optional[datetime] = None
     last_login: Optional[datetime] = None
     notification_settings: Optional[Dict[str, Any]] = None
+    integrations: Optional[Dict[str, Any]] = None
 
 
 # ===============================

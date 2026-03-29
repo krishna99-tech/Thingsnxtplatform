@@ -284,6 +284,8 @@ async def update_me(
         update_fields["full_name"] = user_data["full_name"] if user_data["full_name"] else None
     if "notification_settings" in user_data:
         update_fields["notification_settings"] = user_data["notification_settings"]
+    if "integrations" in user_data:
+        update_fields["integrations"] = user_data["integrations"]
 
     if not update_fields:
         raise HTTPException(status_code=400, detail="No update fields provided")

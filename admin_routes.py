@@ -1104,3 +1104,170 @@ async def get_device_metrics_admin(device_id: str, range: str = "24h", current_u
     # Return a single point for now, or mock history
     val = telemetry.get("value", {})
     return [{"time": datetime.utcnow().strftime("%H:%M"), **val}]
+
+# ============================================================
+# 📁 STORAGE MANAGEMENT (Admin)
+# ============================================================
+class FolderCreateRequest(BaseModel):
+    path: str
+    name: str
+
+class RenameRequest(BaseModel):
+    name: str
+
+class ShareRequest(BaseModel):
+    email: str
+
+class StarRequest(BaseModel):
+    starred: bool
+
+@router.get("/storage/files")
+async def list_files(path: str = "/", current_user: dict = Depends(verify_admin)):
+    """List files and folders in a specific path."""
+    query = {"path": path}
+    files = []
+    async for f in db.files.find(query).sort("type", 1).sort("name", 1):
+        files.append(doc_to_dict(f))
+    return files
+
+@router.get("/storage/stats")
+async def get_storage_stats(current_user: dict = Depends(verify_admin)):
+    """Get storage utilization and counts."""
+    # Mocking total space as 10GB
+    total_space = 10 * 1024 * 1024 * 1024 
+    used_space = 0
+    
+    # Sum up all file sizes
+    pipeline = [{"$group": {"_id": None, "total": {"$sum": "$size"}}}]
+    res = await db.files.aggregate(pipeline).to_list(1)
+    if res:
+        used_space = res[0]["total"]
+
+    file_count = await db.files.count_documents({"type": "file"})
+    folder_count = await db.files.count_documents({"type": "folder"})
+    starred_count = await db.files.count_documents({"is_starred": True})
+    shared_count = await db.files.count_documents({"is_shared": True})
+
+    return {
+        "total_space": total_space,
+        "used_space": used_space,
+        "file_count": file_count,
+        "folder_count": folder_count,
+        "starred_count": starred_count,
+        "shared_count": shared_count
+    }
+
+@router.post("/storage/folder")
+async def create_folder(payload: FolderCreateRequest, current_user: dict = Depends(verify_admin)):
+    """Create a new logical folder in the database."""
+    full_path = os.path.join(payload.path, payload.name).replace("\\", "/")
+    
+    # Check if folder already exists
+    if await db.files.find_one({"path": payload.path, "name": payload.name, "type": "folder"}):
+        raise HTTPException(status_code=400, detail="Folder already exists")
+
+    new_folder = {
+        "name": payload.name,
+        "type": "folder",
+        "path": payload.path,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "owner_id": ObjectId(current_user["id"]),
+        "owner_name": current_user.get("username"),
+        "is_starred": False,
+        "is_shared": False
+    }
+    
+    res = await db.files.insert_one(new_folder)
+    return {"id": str(res.inserted_id), "message": "Folder created"}
+
+@router.post("/storage/upload")
+async def upload_file(
+    path: str = Body(...),
+    file: Any = Body(...), # FastAPI handles UploadFile via Body(...) if using python-multipart
+    current_user: dict = Depends(verify_admin)
+):
+    """
+    Handle file upload (Implementation logic depends on storage backend like S3 or Local FS).
+    """
+    # For now, we mock the local storage database entry
+    filename = getattr(file, "filename", "uploaded_file")
+    content_type = getattr(file, "content_type", "application/octet-stream")
+    # Simulation size
+    size = 1024 * 50 # 50KB mock
+
+    new_file = {
+        "name": filename,
+        "type": "file",
+        "mime_type": content_type,
+        "size": size,
+        "path": path,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        "owner_id": ObjectId(current_user["id"]),
+        "owner_name": current_user.get("username"),
+        "is_starred": False,
+        "is_shared": False,
+        "extension": filename.split(".")[-1] if "." in filename else ""
+    }
+    
+    res = await db.files.insert_one(new_file)
+    return {"id": str(res.inserted_id), "message": "File uploaded"}
+
+@router.delete("/storage/items/{item_id}")
+async def delete_storage_item(item_id: str, current_user: dict = Depends(verify_admin)):
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid item ID")
+        
+    res = await db.files.delete_one({"_id": ObjectId(item_id)})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found")
+        
+    return {"message": "Item deleted"}
+
+@router.put("/storage/items/{item_id}/rename")
+async def rename_storage_item(item_id: str, payload: RenameRequest, current_user: dict = Depends(verify_admin)):
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid item ID")
+        
+    await db.files.update_one(
+        {"_id": ObjectId(item_id)},
+        {"$set": {"name": payload.name, "updated_at": datetime.utcnow()}}
+    )
+    return {"message": "Item renamed"}
+
+@router.post("/storage/items/{item_id}/share")
+async def share_storage_item(item_id: str, payload: ShareRequest, current_user: dict = Depends(verify_admin)):
+    if not ObjectId.is_valid(item_id):
+         raise HTTPException(status_code=400, detail="Invalid item ID")
+         
+    await db.files.update_one(
+        {"_id": ObjectId(item_id)},
+        {"$set": {"is_shared": True}, "$addToSet": {"shared_with": payload.email}}
+    )
+    return {"message": f"Item shared with {payload.email}"}
+
+@router.patch("/storage/items/{item_id}/star")
+async def toggle_star_storage_item(item_id: str, payload: StarRequest, current_user: dict = Depends(verify_admin)):
+    if not ObjectId.is_valid(item_id):
+         raise HTTPException(status_code=400, detail="Invalid item ID")
+         
+    await db.files.update_one(
+        {"_id": ObjectId(item_id)},
+        {"$set": {"is_starred": payload.starred}}
+    )
+    return {"message": "Star toggled"}
+
+@router.get("/storage/items/{item_id}/download")
+async def download_storage_file(item_id: str, current_user: dict = Depends(verify_admin)):
+    """Mock download - in real app, return StreamingResponse from FS/S3."""
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid item ID")
+        
+    file = await db.files.find_one({"_id": ObjectId(item_id)})
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    # Return mock binary
+    from fastapi.responses import Response
+    return Response(content=b"file_content_placeholder", media_type=file.get("mime_type", "application/octet-stream"))
