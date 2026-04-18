@@ -22,6 +22,7 @@ from kafka_service import (
 from admin_routes import router as admin_router
 from utils import get_password_hash
 from datetime import datetime
+from datetime import datetime, timezone
 
 
 
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI):
                 "is_active": True,
                 "is_admin": True,
                 "created_at": datetime.utcnow()
+                "created_at": datetime.now(timezone.utc)
             })
         else:
             if not existing_admin.get("is_admin"):
@@ -118,6 +120,8 @@ app = FastAPI(
 
 # CORS Configuration - Update for production
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+allowed_origins = [origin.strip() for origin in raw_origins.split(",")] if raw_origins != "*" else ["*"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
