@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thingsnxtplatform"
+version = "1.0.0"
+description = "ThingsNXT IoT Platform backend service"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi[all]==0.115.5",
+  "uvicorn[standard]==0.32.0",
+  "websockets==12.0",
+  "bcrypt==3.2.2",
+  "passlib[bcrypt]==1.7.4",
+  "passlib[argon2]==1.7.4",
+  "python-jose[cryptography]==3.3.0",
+  "python-multipart==0.0.9",
+  "argon2-cffi==23.1.0",
+  "python-dotenv==1.0.1",
+  "pydantic[email]==2.9.2",
+  "requests==2.32.3",
+  "pymongo==4.9.2",
+  "motor==3.6.0",
+  "pytz==2024.1",
+  "strawberry-graphql[fastapi]==0.234.2",
+  "aiomqtt==2.3.0",
+  "httpx==0.24.1",
+  "APScheduler==3.10.4",
+  "cryptography==41.0.4",
+  "email-validator==2.0.0",
+  "Pillow==10.4.0",
+  "python-crontab==3.2.0",
+  "redis",
+  "aiokafka==0.11.0",
+]
+
+[project.scripts]
+thingsnxt-api = "main:app"
+
+[tool.setuptools]
+py-modules = [
+  "main",
+  "db",
+  "api_gateway",
+  "device_routes",
+  "mqtt_service",
+  "kafka_service",
+  "admin_routes",
+  "utils",
+]
