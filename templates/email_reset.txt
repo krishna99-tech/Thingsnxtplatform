@@ -17,4 +17,4 @@ Reset on App:
 {% endif %}
 ---
 {{ copyright_text }}
-{{ frontend_url }}
+{{ FRONTEND_URL }}

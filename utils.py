@@ -65,6 +65,8 @@ EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "ThingsNXT")
 APP_NAME = os.getenv("APP_NAME", "ThingsNXT")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
 APP_SCHEME = os.getenv("APP_SCHEME", "thingsnxt")
+# Registered Android OAuth/auth callback URI (matches AndroidManifest intent-filter)
+APP_CALLBACK_URL = os.getenv("APP_CALLBACK_URL", "com.electrogadgedc.ThingsNXT://callback")
 
 pwd_context = CryptContext(schemes=[os.getenv("PWD_SCHEME", "bcrypt")], deprecated="auto")
 
@@ -143,13 +145,14 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> b
 def send_reset_email(email: str, token: str) -> bool:
     """Sends a password reset email using Jinja2 templates."""
     try:
-        # Standard configuration
+        # app_reset_link uses the registered Android callback URI so tapping
+        # "Open in Mobile App" in the email triggers the app directly.
         context = {
             "token": token,
             "app_name": APP_NAME,
             "FRONTEND_URL": FRONTEND_URL,
             "web_reset_link": f"{FRONTEND_URL}/reset-password?token={token}",
-            "app_reset_link": f"{APP_SCHEME}://reset-password?token={token}" if APP_SCHEME else None,
+            "app_reset_link": f"{APP_CALLBACK_URL}?token={token}&screen=reset-password" if APP_CALLBACK_URL else None,
             "copyright_text": f"© {datetime.now().year} {APP_NAME}. All rights reserved.",
         }
 
@@ -207,15 +210,16 @@ def send_welcome_email(email: str, username: str) -> bool:
             "username": username,
             "app_name": APP_NAME,
             "FRONTEND_URL": FRONTEND_URL,
-            "app_home_link": f"{APP_SCHEME}://home" if APP_SCHEME else None,
+            # Callback: opens app → Home screen
+            "app_home_link": f"{APP_CALLBACK_URL}?screen=home" if APP_CALLBACK_URL else None,
             "year": datetime.now().year,
         }
-        
+
         subject = f"Welcome to {APP_NAME}!"
         template = jinja_env.get_template("email_welcome.html")
         html_body = template.render(context)
-        text_body = f"Welcome to {app_name}, {username}!\nYour account is ready."
-        
+        text_body = f"Welcome to {APP_NAME}, {username}!\nYour account is ready."
+
         return send_email(email, subject, html_body, text_body)
     except Exception as e:
         logger.error(f"Failed to send welcome email to {email}: {e}")
@@ -229,15 +233,16 @@ def send_user_alert_email(email: str, subject: str, message: str) -> bool:
             "message": message,
             "app_name": APP_NAME,
             "FRONTEND_URL": FRONTEND_URL,
-            "app_login_link": f"{APP_SCHEME}://login" if APP_SCHEME else None,
+            # Callback: opens app → Login screen
+            "app_login_link": f"{APP_CALLBACK_URL}?screen=login" if APP_CALLBACK_URL else None,
             "year": datetime.now().year,
         }
-        
+
         full_subject = f"SYSTEM ALERT: {subject}"
         template = jinja_env.get_template("email_alert.html")
         html_body = template.render(context)
         text_body = f"SYSTEM ALERT: {subject}\n\n{message}"
-        
+
         return send_email(email, full_subject, html_body, text_body)
     except Exception as e:
         logger.error(f"Failed to send alert email to {email}: {e}")
@@ -261,16 +266,17 @@ def send_device_status_email(
             "last_active": last_active,
             "app_name": APP_NAME,
             "FRONTEND_URL": FRONTEND_URL,
-            "app_device_link": f"{APP_SCHEME}://device/{device_id}" if APP_SCHEME else None,
+            # Callback: opens app → Device detail screen for this device_id
+            "app_device_link": f"{APP_CALLBACK_URL}?screen=device&device_id={device_id}" if APP_CALLBACK_URL else None,
             "year": datetime.now().year,
         }
-        
+
         status_emoji = "🟢" if status == "online" else "🔴"
         subject = f"{status_emoji} Device {status.upper()}: {device_name}"
-        
+
         template = jinja_env.get_template("email_device_status.html")
         html_body = template.render(context)
-        
+
         text_body = f"""
 Device Status Update
 
@@ -280,12 +286,13 @@ Status: {status.upper()}
 Timestamp: {timestamp}
 {f'Last Active: {last_active}' if last_active else ''}
 
-View device details: {frontend_url}/devices/{device_id}
+View device details: {FRONTEND_URL}/devices/{device_id}
+Open in App: {APP_CALLBACK_URL}?screen=device&device_id={device_id}
 
 --
-{app_name} IoT Platform
+{APP_NAME} IoT Platform
 """
-        
+
         return send_email(email, subject, html_body, text_body)
     except Exception as e:
         logger.error(f"Failed to send device status email to {email}: {e}")
@@ -299,28 +306,26 @@ def send_device_registered_email(
 ) -> bool:
     """Sends a device registration confirmation with credentials."""
     try:
-        app_name = os.getenv("APP_NAME", "ThingsNXT")
-        frontend_url = os.getenv("FRONTEND_URL", "https://thingsnxt.vercel.app")
-        
         context = {
             "device_name": device_name,
             "device_id": device_id,
             "device_token": device_token,
-            "app_name": app_name,
-            "FRONTEND_URL": frontend_url,
-            "app_device_link": f"{app_scheme}://device/{device_id}" if app_scheme else None,
+            "app_name": APP_NAME,
+            "FRONTEND_URL": FRONTEND_URL,
+            # Callback: opens app → Device detail screen for this device_id
+            "app_device_link": f"{APP_CALLBACK_URL}?screen=device&device_id={device_id}" if APP_CALLBACK_URL else None,
             "year": datetime.now().year,
         }
-        
+
         subject = f"🎉 Device Registered: {device_name}"
-        
+
         template = jinja_env.get_template("email_device_registered.html")
         html_body = template.render(context)
-        
+
         text_body = f"""
 Device Successfully Registered!
 
-Your new IoT device has been added to your {app_name} account.
+Your new IoT device has been added to your {APP_NAME} account.
 
 Device Name: {device_name}
 Device ID: {device_id}
@@ -334,13 +339,14 @@ Next Steps:
 2. Connect your device to the network
 3. Start sending telemetry data
 
-View device: {frontend_url}/devices/{device_id}
-Documentation: {frontend_url}/docs/esp32-setup
+View device: {FRONTEND_URL}/devices/{device_id}
+Open in App: {APP_CALLBACK_URL}?screen=device&device_id={device_id}
+Documentation: {FRONTEND_URL}/docs/esp32-setup
 
 --
-{app_name} IoT Platform
+{APP_NAME} IoT Platform
 """
-        
+
         return send_email(email, subject, html_body, text_body)
     except Exception as e:
         logger.error(f"Failed to send device registered email to {email}: {e}")
