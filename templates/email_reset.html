@@ -171,7 +171,13 @@
                             <a href="{{ web_reset_link }}" class="btn-primary">Reset on Web Dashboard</a>
                         </td>
                     </tr>
-                    {% if app_reset_link %}
+                    {% if android_app_reset_link %}
+                    <tr>
+                        <td>
+                            <a href="{{ android_app_reset_link }}" class="btn-secondary">Open in Mobile App (Android)</a>
+                        </td>
+                    </tr>
+                    {% elif app_reset_link %}
                     <tr>
                         <td>
                             <a href="{{ app_reset_link }}" class="btn-secondary">Open in Mobile App</a>

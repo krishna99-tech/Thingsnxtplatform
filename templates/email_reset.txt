@@ -11,7 +11,10 @@ Choose how to reset your password:
 Reset on Web:
 {{ web_reset_link }}
 
-{% if app_reset_link -%}
+{% if android_app_reset_link -%}
+Reset on App (Android):
+{{ android_app_reset_link }}
+{% elif app_reset_link -%}
 Reset on App:
 {{ app_reset_link }}
 {% endif %}

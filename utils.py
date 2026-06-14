@@ -10,6 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from jinja2 import Environment, FileSystemLoader
+from urllib.parse import quote
 from bson import ObjectId
 import pytz
 
@@ -145,14 +146,25 @@ def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> b
 def send_reset_email(email: str, token: str) -> bool:
     """Sends a password reset email using Jinja2 templates."""
     try:
-        # app_reset_link uses the registered Android callback URI so tapping
-        # "Open in Mobile App" in the email triggers the app directly.
+        android_package = os.getenv("ANDROID_PACKAGE", "com.electrogadgedc.ThingsNXT")
+        encoded_token = quote(token, safe="")
+        web_reset_link = f"{FRONTEND_URL}/reset-password?token={encoded_token}"
+        app_reset_link = f"thingsnxt://reset-password?token={encoded_token}"
+        # Gmail and many Android mail clients handle intent:// links more reliably than raw custom schemes.
+        android_app_reset_link = (
+            "intent://reset-password"
+            f"?token={encoded_token}"
+            f"#Intent;scheme=thingsnxt;package={android_package};"
+            f"S.browser_fallback_url={quote(web_reset_link, safe='')};end"
+        )
+
         context = {
             "token": token,
             "app_name": APP_NAME,
             "FRONTEND_URL": FRONTEND_URL,
-            "web_reset_link": f"{FRONTEND_URL}/reset-password?token={token}",
-            "app_reset_link": f"{APP_CALLBACK_URL}?token={token}&screen=reset-password" if APP_CALLBACK_URL else None,
+            "web_reset_link": web_reset_link,
+            "app_reset_link": app_reset_link,
+            "android_app_reset_link": android_app_reset_link,
             "copyright_text": f"© {datetime.now().year} {APP_NAME}. All rights reserved.",
         }
 

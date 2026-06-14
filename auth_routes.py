@@ -359,10 +359,18 @@ async def reset_password(request: ResetPasswordRequest):
         raise HTTPException(status_code=400, detail="Token expired")
 
     hashed = get_password_hash(request.new_password)
-    await db.users.update_one(
+
+    # Update the user's password
+    updated_user = await db.users.find_one_and_update(
         {"email": token_data["email"]},
         {"$set": {"hashed_password": hashed}},
     )
+
+    # Invalidate all active refresh tokens so existing sessions are revoked
+    if updated_user:
+        await db.refresh_tokens.delete_many({"user_id": updated_user["_id"]})
+
+    # Mark the reset token as used
     await db.reset_tokens.update_one(
         {"_id": token_data["_id"]}, {"$set": {"used": True}}
     )
