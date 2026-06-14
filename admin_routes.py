@@ -255,7 +255,7 @@ async def create_user_admin(payload: UserCreateRequest, current_user: dict = Dep
         "role": payload.role,
         "is_admin": payload.role == "Admin",
         "is_active": True,
-        "created_at": datetime.utcnow()
+        "created_at": datetime.utcnow(),
     }
     res = await db.users.insert_one(user_doc)
     user_doc["_id"] = res.inserted_id
@@ -403,7 +403,7 @@ async def create_device_admin(payload: DeviceCreateAdmin, current_user: dict = D
         "status": "offline",
         "created_at": datetime.utcnow(),
         "last_active": None,
-        "device_token": secrets.token_hex(16)
+        "device_token": secrets.token_hex(16),
     }
     
     result = await db.devices.insert_one(new_device)
@@ -1175,7 +1175,7 @@ async def create_folder(payload: FolderCreateRequest, current_user: dict = Depen
         "owner_id": ObjectId(current_user["id"]),
         "owner_name": current_user.get("username"),
         "is_starred": False,
-        "is_shared": False
+        "is_shared": False,
     }
     
     res = await db.files.insert_one(new_folder)
@@ -1208,7 +1208,7 @@ async def upload_file(
         "owner_name": current_user.get("username"),
         "is_starred": False,
         "is_shared": False,
-        "extension": filename.split(".")[-1] if "." in filename else ""
+        "extension": filename.split(".")[-1] if "." in filename else "",
     }
     
     res = await db.files.insert_one(new_file)

@@ -21,7 +21,6 @@ from kafka_service import (
 
 from admin_routes import router as admin_router
 from utils import get_password_hash
-from datetime import datetime
 from datetime import datetime, timezone
 
 
@@ -84,7 +83,6 @@ async def lifespan(app: FastAPI):
                 "role": "Admin",
                 "is_active": True,
                 "is_admin": True,
-                "created_at": datetime.utcnow()
                 "created_at": datetime.now(timezone.utc)
             })
         else:
