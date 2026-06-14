@@ -168,7 +168,7 @@
                 <table class="action-table">
                     <tr>
                         <td>
-                            <a href="{{ web_reset_link }}" class="btn-primary">Reset on Web Dashboard</a>
+                            <a href="{{ web_reset_link if web_reset_link else FRONTEND_URL + '/reset-password?token=' + token }}" class="btn-primary" target="_blank">Reset on Web Dashboard</a>
                         </td>
                     </tr>
                     {% if android_app_reset_link %}
@@ -191,10 +191,10 @@
             <div class="footer">
                 <div class="social-links">
                     <a href="{{ FRONTEND_URL }}" class="social-link">Website</a> •
-                    <a href="{{ FRONTEND_URL }}/help" class="social-link">Help Center</a>
+                    <a href="{{ FRONTEND_URL }}/support" class="social-link">Support Center</a>
                 </div>
                 
-                <p>{{ copyright_text }}</p>
+                <p>&copy; {{ year }} {{ app_name }}. All rights reserved.</p>
                 <p>This is a security notification regarding your {{ app_name }} account.</p>
             </div>
         </div>

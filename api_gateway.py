@@ -96,8 +96,9 @@ class RateLimiter:
 
                 request_count = results[2]
                 if request_count > self.requests_limit:
-                    logger.warning(f"Rate limit exceeded for IP: {client_ip}")
-                    raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many requests. Please try again later.")
+                    logger.warning(f"Rate limit hit for IP: {client_ip} (Rejection disabled)")
+                    # Rejection undone: we log the event but allow the request through
+                    return
                 return
             except (redis.ConnectionError, redis.TimeoutError, OSError) as e:
                 logger.warning(f"Redis unavailable ({e}). Switching to in-memory rate limiting.")

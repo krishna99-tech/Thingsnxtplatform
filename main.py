@@ -13,6 +13,7 @@ from device_routes import led_schedule_worker, auto_offline_checker
 from mqtt_service import MQTT_ENABLED, mqtt_bridge_worker
 from kafka_service import (
     KAFKA_ENABLED,
+    initialize_kafka_services,
     start_kafka_producer,
     stop_kafka_producer,
     start_kafka_relay_background,
@@ -22,7 +23,6 @@ from kafka_service import (
 from admin_routes import router as admin_router
 from utils import get_password_hash
 from datetime import datetime, timezone
-
 
 
 # Configure logging
@@ -61,12 +61,9 @@ async def lifespan(app: FastAPI):
         else:
             logger.info("ℹ️ MQTT bridge disabled (set MQTT_ENABLED=true to enable)")
 
-        await start_kafka_producer()
         if KAFKA_ENABLED:
-            start_kafka_relay_background()
-            logger.info("✅ Kafka producer + UI relay started (or will connect lazily)")
-        else:
-            logger.info("ℹ️ Kafka disabled (KAFKA_ENABLED=false)")
+            initialize_kafka_services()
+            logger.info("✅ Kafka initialization task started")
 
         # Seed Default Admin
         admin_user = os.getenv("DEFAULT_ADMIN_USER", "admin")
@@ -82,8 +79,8 @@ async def lifespan(app: FastAPI):
                 "full_name": "System Administrator",
                 "role": "Admin",
                 "is_active": True,
-                "is_admin": True,
-                "created_at": datetime.now(timezone.utc)
+                "is_admin": True, # Ensure this comma is present
+                "created_at": datetime.now(timezone.utc), # Use timezone-aware datetime
             })
         else:
             if not existing_admin.get("is_admin"):

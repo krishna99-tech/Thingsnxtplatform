@@ -25,6 +25,7 @@ _producer: Optional[AIOKafkaProducer] = None
 _produced_count = 0
 _last_publish_error: Optional[str] = None
 _relay_task: Optional[asyncio.Task] = None
+_watchdog_task: Optional[asyncio.Task] = None
 
 
 def kafka_bootstrap_masked() -> str:
@@ -33,18 +34,35 @@ def kafka_bootstrap_masked() -> str:
 
 
 def kafka_stats() -> Dict[str, Any]:
+    is_ready = False
+    # Check if producer exists and is specifically marked as connected via start()
+    if _producer is not None and _last_publish_error is None:
+        is_ready = True
+        
     return {
         "enabled": KAFKA_ENABLED,
         "bootstrap": kafka_bootstrap_masked(),
         "topic_telemetry": KAFKA_TOPIC_TELEMETRY,
-        "producer_started": _producer is not None,
+        "status": "connected" if is_ready else ("connecting" if KAFKA_ENABLED else "disabled"),
         "messages_produced": _produced_count,
         "last_publish_error": _last_publish_error,
     }
 
 
+async def kafka_producer_watchdog():
+    """Periodically verifies Kafka producer health and restarts if necessary."""
+    while True:
+        if KAFKA_ENABLED and (_producer is None or _last_publish_error):
+            try:
+                logger.info("📡 Kafka Watchdog: Producer unhealthy or disconnected, attempting start...")
+                await start_kafka_producer()
+            except Exception as e:
+                logger.debug(f"Watchdog attempt failed: {e}")
+        await asyncio.sleep(20) # Check every 20 seconds
+
+
 async def start_kafka_producer() -> None:
-    global _producer, _last_publish_error
+    global _producer, _last_publish_error, _watchdog_task
     if not KAFKA_ENABLED:
         logger.info("Kafka disabled (KAFKA_ENABLED=false)")
         return
@@ -60,14 +78,15 @@ async def start_kafka_producer() -> None:
         await _producer.start()
         logger.info("Kafka producer started (%s topic=%s)", servers, KAFKA_TOPIC_TELEMETRY)
         _last_publish_error = None
-    except (KafkaConnectionError, OSError) as e:
-        _producer = None
+    except (KafkaConnectionError, OSError, Exception) as e:
+        await stop_kafka_producer()
+        _producer = None # Ensure it is reset so watchdog tries again
         _last_publish_error = str(e)
-        logger.warning("Kafka producer could not start (will retry on publish): %s", e)
+        logger.warning("Kafka producer could not start (watchdog will retry): %s", e)
 
 
 async def stop_kafka_producer() -> None:
-    global _producer
+    global _producer, _watchdog_task
    
     if _producer is not None:
         try:
@@ -76,6 +95,10 @@ async def stop_kafka_producer() -> None:
             logger.debug("Kafka producer stop: %s", e)
         finally:
             _producer = None
+            
+    if _watchdog_task:
+        _watchdog_task.cancel()
+        _watchdog_task = None
 
 
 async def publish_telemetry_enriched(
@@ -180,6 +203,14 @@ def start_kafka_relay_background() -> None:
         return
     loop = asyncio.get_running_loop()
     _relay_task = loop.create_task(kafka_ui_relay_worker(), name="kafka_ui_relay")
+
+def initialize_kafka_services() -> None:
+    """Entry point to start all Kafka-related background tasks without blocking main thread."""
+    global _watchdog_task
+    if KAFKA_ENABLED:
+        if _watchdog_task is None or _watchdog_task.done():
+            _watchdog_task = asyncio.create_task(kafka_producer_watchdog(), name="kafka_watchdog")
+        start_kafka_relay_background()
 
 
 async def stop_kafka_relay() -> None:
